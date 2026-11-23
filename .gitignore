@@ -1,0 +1,9 @@
+# Personal task data — NEVER upload to GitHub
+tasks.json
+horizon-tasks-*.json
+
+# Python & OS generated files
+__pycache__/
+*.pyc
+.DS_Store
+Thumbs.db

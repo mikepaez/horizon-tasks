@@ -1,0 +1,1646 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Horizon</title>
+  <style>
+:root {
+  --bg: #f5efe4;
+  --surface: #fbf8f1;
+  --surface-alt: #ede5d6;
+  --border: #ddd3c2;
+  --border-strong: #c8bca8;
+  --ink: #231e18;
+  --muted: #6e6150;
+  --soft: #968773;
+  --danger: #b93a2e;
+  --ok: #466958;
+  --radius: 4px;
+  --serif: Georgia, "Times New Roman", serif;
+  --mono: ui-monospace, "Cascadia Mono", Consolas, "Courier New", monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.hidden {
+  display: none !important;
+}
+
+button,
+label.text-btn {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.shell {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 16px 18px 36px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* Top Bar */
+.topbar {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.topbar-left {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  flex-wrap: wrap;
+}
+
+.topbar h1 {
+  margin: 0;
+  font-family: var(--serif);
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+}
+
+.sep {
+  color: var(--border-strong);
+}
+
+.meta-mono {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.storage-tag {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: 3px;
+  padding: 1px 6px;
+}
+
+.storage-tag.is-linked {
+  color: var(--ok);
+  border-color: #b7cbbd;
+  background: #eff5f0;
+}
+
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.text-btn {
+  background: none;
+  border: none;
+  padding: 2px 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.text-btn:hover {
+  color: var(--ink);
+  text-decoration: underline;
+}
+
+/* Capture Bar */
+.capture-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 5px 7px;
+}
+
+.capture-input {
+  flex: 1 1 200px;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  padding: 4px 6px;
+  font-size: 13px;
+  color: var(--ink);
+  outline: none;
+}
+
+.capture-input::placeholder {
+  color: var(--soft);
+  font-style: italic;
+}
+
+.capture-date {
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 3px 6px;
+  outline: none;
+}
+
+.capture-date:focus {
+  border-color: var(--ink);
+  color: var(--ink);
+}
+
+.capture-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+  padding: 3px 6px;
+  border-radius: 3px;
+  user-select: none;
+}
+
+.capture-check:hover {
+  background: var(--surface-alt);
+  color: var(--ink);
+}
+
+.capture-check input {
+  margin: 0;
+  accent-color: var(--danger);
+}
+
+.btn-add {
+  background: var(--ink);
+  color: #fbf8f1;
+  border: 1px solid var(--ink);
+  border-radius: 3px;
+  padding: 4px 13px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.btn-add:hover {
+  background: #3b3329;
+}
+
+/* Warm Paper Editorial Blocks */
+.block {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 11px 14px;
+}
+
+.block-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+  padding-bottom: 5px;
+  border-bottom: 1px solid var(--surface-alt);
+}
+
+.block-title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.block-head h2 {
+  margin: 0;
+  font-family: var(--serif);
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.ok-text {
+  color: var(--ok);
+}
+
+.nudge {
+  font-size: 11.5px;
+  font-style: italic;
+  color: var(--soft);
+}
+
+.nudge.is-heavy {
+  color: var(--danger);
+  font-style: normal;
+  font-weight: 600;
+}
+
+/* Paper Desk 3-Month Horizon */
+.legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--soft);
+}
+
+.legend-bar {
+  width: 58px;
+  height: 7px;
+  border-radius: 2px;
+  background: linear-gradient(
+    to right,
+    rgba(92, 118, 106, 0.1) 0%,
+    rgba(168, 134, 58, 0.55) 55%,
+    rgba(185, 58, 46, 0.98) 100%
+  );
+  border: 1px solid rgba(35, 30, 24, 0.12);
+}
+
+.overdue-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+  padding: 5px 8px;
+  background: #f9eae7;
+  border: 1px solid #e4bdb6;
+  border-radius: 3px;
+  font-size: 11.5px;
+}
+
+.overdue-label {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--danger);
+}
+
+.overdue-chip {
+  background: var(--danger);
+  color: #fdfaf4;
+  border: none;
+  border-radius: 2px;
+  padding: 2px 7px;
+  font-size: 11.5px;
+  font-weight: 500;
+}
+
+.timeline-scroll {
+  overflow-x: auto;
+}
+
+.timeline-canvas {
+  position: relative;
+  min-width: 680px;
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 7px 9px 9px;
+}
+
+.timeline-axis {
+  position: relative;
+  height: 20px;
+  border-bottom: 1px solid var(--border-strong);
+  margin-bottom: 7px;
+}
+
+.month-marker {
+  position: absolute;
+  top: 0;
+  height: 15px;
+  padding-left: 5px;
+  border-left: 1px solid var(--border-strong);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  white-space: nowrap;
+}
+
+.month-marker.is-today {
+  border-left: 2px solid var(--ink);
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.timeline-grid {
+  position: absolute;
+  top: 27px;
+  bottom: 7px;
+  left: 9px;
+  right: 9px;
+  pointer-events: none;
+}
+
+.grid-line {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: rgba(35, 30, 24, 0.05);
+}
+
+.grid-line.is-major {
+  background: rgba(35, 30, 24, 0.12);
+}
+
+.timeline-lanes {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  max-height: 224px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.timeline-empty {
+  color: var(--soft);
+  font-style: italic;
+  font-size: 12px;
+  padding: 8px 4px;
+}
+
+.timeline-lane {
+  position: relative;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+/* Watercolor wash fading left-to-right into a crisp solid right-edge deadline block */
+.timeline-bar {
+  position: relative;
+  height: 20px;
+  border-radius: 2px;
+  border: none;
+  border-right: 3px solid transparent;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 0 7px;
+  flex-shrink: 0;
+  max-width: 100%;
+  overflow: hidden;
+  transition: filter 0.1s ease;
+}
+
+.timeline-bar:hover {
+  filter: brightness(0.94);
+}
+
+.timeline-bar-label {
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: calc(100% - 76px);
+}
+
+.timeline-bar-meta {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  opacity: 0.9;
+  margin-left: 6px;
+  white-space: nowrap;
+}
+
+.timeline-outside-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 7px;
+  padding: 1px 5px;
+  border: none;
+  border-radius: 2px;
+  background: transparent;
+  color: var(--ink);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.timeline-outside-label:hover {
+  background: var(--surface-alt);
+}
+
+.timeline-outside-title {
+  font-weight: 500;
+}
+
+.timeline-outside-meta {
+  font-family: var(--mono);
+  font-size: 10.5px;
+}
+
+.timeline-beyond-note {
+  margin-top: 4px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--soft);
+}
+
+/* Original Two-Column Layout */
+.columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  align-items: start;
+}
+
+@media (max-width: 740px) {
+  .columns {
+    grid-template-columns: 1fr;
+  }
+}
+
+.col {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.filters {
+  display: inline-flex;
+  gap: 2px;
+}
+
+.filter-btn {
+  border: none;
+  background: transparent;
+  color: var(--soft);
+  font-size: 11.5px;
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+
+.filter-btn:hover {
+  color: var(--ink);
+}
+
+.filter-btn.active {
+  background: var(--surface-alt);
+  color: var(--ink);
+  font-weight: 600;
+}
+
+/* Hairline-divided Notebook Rows */
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.task-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 4px;
+  border-top: 1px solid var(--surface-alt);
+}
+
+.task-item:first-child {
+  border-top: none;
+}
+
+.task-item:hover {
+  background: #f5efe4;
+}
+
+.task-item.is-done .task-title {
+  text-decoration: line-through;
+  color: var(--soft);
+}
+
+.task-checkbox {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--ok);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.task-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.task-title {
+  font-size: 13px;
+  color: var(--ink);
+  word-break: break-word;
+}
+
+.due-tag {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 1px 5px;
+  border-radius: 2px;
+  white-space: nowrap;
+}
+
+.done-date {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--soft);
+}
+
+.task-actions {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+  opacity: 0.55;
+  transition: opacity 0.12s ease;
+}
+
+.task-item:hover .task-actions,
+.task-item:focus-within .task-actions {
+  opacity: 1;
+}
+
+.inline-date-input {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  border: 1px solid transparent;
+  border-radius: 2px;
+  padding: 1px 4px;
+  color: var(--muted);
+  background: transparent;
+  width: 96px;
+}
+
+.task-item:hover .inline-date-input,
+.inline-date-input:focus {
+  border-color: var(--border);
+  background: var(--surface);
+}
+
+.row-btn {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  border-radius: 2px;
+  padding: 2px 6px;
+  font-size: 11.5px;
+}
+
+.row-btn:hover {
+  background: var(--surface-alt);
+  color: var(--ink);
+}
+
+.row-btn.del:hover {
+  color: var(--danger);
+  background: #f9eae7;
+}
+
+.empty {
+  color: var(--soft);
+  font-style: italic;
+  font-size: 12px;
+  padding: 8px 4px;
+}
+
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <!-- Compact Top Bar -->
+    <header class="topbar">
+      <div class="topbar-left">
+        <h1>Horizon</h1>
+        <span class="sep">/</span>
+        <span class="meta-mono" id="today-label"></span>
+        <span class="storage-tag" id="storage-tag" title="Where tasks are saved">tasks.json</span>
+      </div>
+      <div class="topbar-right">
+        <button type="button" class="text-btn hidden" id="link-file-btn" title="Open an existing tasks.json and auto-save changes to it">Open file</button>
+        <button type="button" class="text-btn hidden" id="new-file-btn" title="Create a new tasks.json file and auto-save changes to it">New file</button>
+        <button type="button" class="text-btn hidden" id="clear-samples-btn">Clear samples</button>
+        <button type="button" class="text-btn" id="export-btn">Export</button>
+        <label class="text-btn">
+          Import
+          <input type="file" id="import-input" accept="application/json,.json" hidden />
+        </label>
+      </div>
+    </header>
+
+    <!-- Single-line Quick Capture -->
+    <form id="add-task-form" class="capture-bar" aria-label="Add task">
+      <input
+        type="text"
+        id="task-title-input"
+        class="capture-input"
+        placeholder="Add a task..."
+        autocomplete="off"
+        required
+      />
+      <input type="date" id="task-date-input" class="capture-date" title="Optional deadline" />
+      <label class="capture-check" title="Add to Today's Focus (anchors to Today on timeline)">
+        <input type="checkbox" id="task-today-input" />
+        <span>Today</span>
+      </label>
+      <button type="submit" class="btn-add">Add</button>
+    </form>
+
+    <!-- Compact 3-Month Horizontal Calendar Stripe -->
+    <section class="block timeline-block" aria-label="3-month horizon">
+      <div class="block-head">
+        <div class="block-title">
+          <h2>3-Month Horizon</h2>
+          <span class="meta-mono" id="timeline-count">0</span>
+        </div>
+        <div class="legend" aria-hidden="true">
+          <span>90d</span>
+          <span class="legend-bar"></span>
+          <span>Due</span>
+        </div>
+      </div>
+
+      <div class="overdue-row hidden" id="overdue-strip"></div>
+
+      <div class="timeline-scroll">
+        <div class="timeline-canvas">
+          <div class="timeline-axis" id="timeline-months"></div>
+          <div class="timeline-grid" id="timeline-grid"></div>
+          <div class="timeline-lanes" id="timeline-lanes"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Compact Two-Column Lists -->
+    <main class="columns">
+      <div class="col">
+        <section class="block" aria-label="Today's Focus">
+          <div class="block-head">
+            <div class="block-title">
+              <h2>Today</h2>
+              <span class="meta-mono" id="today-count">0</span>
+            </div>
+            <span class="nudge" id="focus-nudge">1–3 focus items</span>
+          </div>
+          <ul class="list" id="today-list"></ul>
+          <div class="empty hidden" id="today-empty">Nothing set for today.</div>
+        </section>
+
+        <section class="block" aria-label="Completed">
+          <div class="block-head">
+            <div class="block-title">
+              <h2>Done</h2>
+              <span class="meta-mono ok-text" id="wins-week-badge">0 this week</span>
+            </div>
+            <button type="button" class="text-btn hidden" id="clear-done-btn">Clear</button>
+          </div>
+          <ul class="list" id="done-list"></ul>
+          <div class="empty hidden" id="done-empty">Completed tasks appear here.</div>
+        </section>
+      </div>
+
+      <div class="col">
+        <section class="block" aria-label="Inbox">
+          <div class="block-head">
+            <div class="block-title">
+              <h2>Inbox</h2>
+              <span class="meta-mono" id="inbox-count">0</span>
+            </div>
+            <div class="filters" role="group" aria-label="Filter inbox">
+              <button type="button" class="filter-btn active" data-filter="all">All</button>
+              <button type="button" class="filter-btn" data-filter="dated">Dated</button>
+              <button type="button" class="filter-btn" data-filter="flexible">Undated</button>
+            </div>
+          </div>
+          <ul class="list" id="inbox-list"></ul>
+          <div class="empty hidden" id="inbox-empty">Inbox clear.</div>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <script>
+/**
+ * logic.js — "The Kitchen"
+ * Pure functions that handle dates, the 3-month timeline position,
+ * and the transparent-to-solid urgency gradient math.
+ *
+ * Notice there is NO button or HTML code here — just clear rules
+ * (Input -> Logic -> Output) so it is easy to read and test.
+ */
+
+const HORIZON_DAYS = 90; // 3 months zoomed out
+
+/**
+ * Convert a Date object to local "YYYY-MM-DD" text (safe from timezone shifts).
+ */
+function toDateKey(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+/**
+ * Turn "YYYY-MM-DD" into a local midnight Date.
+ */
+function parseDateKey(dateKey) {
+  if (!dateKey || typeof dateKey !== "string") return null;
+  const parts = dateKey.split("-").map(Number);
+  if (parts.length !== 3 || parts.some(Number.isNaN)) return null;
+  return new Date(parts[0], parts[1] - 1, parts[2]);
+}
+
+/**
+ * Whole calendar days between today and dueDateKey.
+ * Negative = overdue, 0 = due today, positive = days left.
+ */
+function daysUntil(dueDateKey, today = new Date()) {
+  const due = parseDateKey(dueDateKey);
+  if (!due) return null;
+  const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const msPerDay = 24 * 60 * 60 * 1000;
+  return Math.round((due - startOfToday) / msPerDay);
+}
+
+/**
+ * Human-friendly label like "Today", "Tomorrow", "In 12d", or "2d overdue".
+ */
+function formatDaysLabel(days) {
+  if (days === null || days === undefined) return "";
+  if (days < 0) return `${Math.abs(days)}d overdue`;
+  if (days === 0) return "Today";
+  if (days === 1) return "Tomorrow";
+  return `In ${days}d`;
+}
+
+/**
+ * Short readable date like "Dec 12".
+ */
+function formatShortDate(dateKey) {
+  const d = parseDateKey(dateKey);
+  if (!d) return "";
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+/**
+ * Calculate the visual gradient style for a task based on how many days are left.
+ *
+ * How it works:
+ * - "closeness" goes smoothly from 0 (90+ days away) to 1 (due today or overdue).
+ * - Far-away tasks start almost transparent and peak softly.
+ * - Close tasks ramp into a rich, full solid color block so they naturally stand out.
+ */
+function getGradientStyle(daysLeft) {
+  // Clamp daysLeft between 0 and HORIZON_DAYS for smooth scaling
+  const clamped = Math.max(0, Math.min(HORIZON_DAYS, daysLeft));
+  const closeness = 1 - clamped / HORIZON_DAYS; // 0 = far away, 1 = due right now
+
+  // Paper Desk watercolor palette:
+  // Far (calm sage) -> Mid (warm ochre) -> Approaching (burnt sienna) -> Imminent (terracotta crimson)
+  let rgb;
+  if (daysLeft < 0) {
+    rgb = [168, 38, 32]; // Overdue deep brick
+  } else if (daysLeft <= 3) {
+    rgb = [185, 58, 46]; // Imminent terracotta red
+  } else if (daysLeft <= 14) {
+    rgb = [196, 108, 43]; // Approaching burnt sienna
+  } else if (daysLeft <= 35) {
+    rgb = [168, 134, 58]; // Mid-term warm ochre
+  } else {
+    rgb = [92, 118, 106]; // Long-term calm sage
+  }
+
+  const [r, g, b] = rgb;
+
+  // Left edge of the bar: near-transparent watercolor wash; right edge: solid color cap
+  const startAlpha = Number((0.03 + closeness * 0.34).toFixed(2));
+  const endAlpha = Number((0.26 + closeness * 0.74).toFixed(2));
+
+  // Keep dark ink on pale/mid washes; white text only on vivid close-deadline solid blocks
+  const useLightText = daysLeft <= 14;
+
+  return {
+    closeness: Number(closeness.toFixed(3)),
+    startAlpha,
+    endAlpha,
+    background: `linear-gradient(to right, rgba(${r}, ${g}, ${b}, ${startAlpha}) 0%, rgba(${r}, ${g}, ${b}, ${endAlpha}) 100%)`,
+    borderColor: `rgb(${r}, ${g}, ${b})`,
+    textColor: useLightText ? "#fdfaf4" : "#231e18",
+    badgeBg: `rgba(${r}, ${g}, ${b}, ${Number((0.11 + closeness * 0.2).toFixed(2))})`,
+    badgeColor: `rgb(${Math.max(0, r - 30)}, ${Math.max(0, g - 30)}, ${Math.max(0, b - 30)})`,
+  };
+}
+
+/**
+ * True calendar width percentage (2.5..100) for a task bar stretching from Today
+ * to its exact deadline on the 90-day horizon.
+ */
+function getTimelineWidthPercent(daysLeft) {
+  if (daysLeft <= 0) return 2.5; // Crisp solid block right on Today
+  const clamped = Math.min(HORIZON_DAYS, daysLeft);
+  const rawPercent = (clamped / HORIZON_DAYS) * 100;
+  return Math.max(2.5, Number(rawPercent.toFixed(2)));
+}
+
+/**
+ * Build the month markers along the 90-day strip (Today + each upcoming month's 1st).
+ */
+function getMonthMarkers(today = new Date()) {
+  const start = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const markers = [
+    {
+      label: "Today",
+      percent: 0,
+      isToday: true,
+    },
+  ];
+
+  for (let offset = 1; offset <= HORIZON_DAYS; offset++) {
+    const d = new Date(start.getFullYear(), start.getMonth(), start.getDate() + offset);
+    if (d.getDate() === 1) {
+      const percent = Number(((offset / HORIZON_DAYS) * 100).toFixed(2));
+      // Keep clean breathing room from the Today label
+      if (percent >= 8 && percent <= 94) {
+        markers.push({
+          label: d.toLocaleDateString("en-US", { month: "short", year: d.getMonth() === 0 ? "numeric" : undefined }),
+          percent,
+          isToday: false,
+        });
+      }
+    }
+  }
+  return markers;
+}
+
+/**
+ * Count how many tasks were completed within the last 7 days.
+ */
+function countCompletedThisWeek(tasks, today = new Date()) {
+  const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const sevenDaysAgo = new Date(startOfToday.getTime() - 6 * 24 * 60 * 60 * 1000);
+  return tasks.filter((t) => {
+    if (t.status !== "done" || !t.completedAt) return false;
+    const doneDate = parseDateKey(t.completedAt);
+    return doneDate && doneDate >= sevenDaysAgo;
+  }).length;
+}
+
+/**
+ * Sort active tasks: soonest deadline first, then tasks without deadlines (newest first).
+ */
+function sortTasksByUrgency(tasks, today = new Date()) {
+  return [...tasks].sort((a, b) => {
+    const da = a.dueDate ? daysUntil(a.dueDate, today) : Infinity;
+    const db = b.dueDate ? daysUntil(b.dueDate, today) : Infinity;
+    if (da !== db) return da - db;
+    return (b.createdAt || 0) - (a.createdAt || 0);
+  });
+}
+
+// Export for Node.js tests if running in a test environment, while staying simple in the browser.
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = {
+    HORIZON_DAYS,
+    toDateKey,
+    parseDateKey,
+    daysUntil,
+    formatDaysLabel,
+    formatShortDate,
+    getGradientStyle,
+    getTimelineWidthPercent,
+    getMonthMarkers,
+    countCompletedThisWeek,
+    sortTasksByUrgency,
+  };
+}
+
+  </script>
+  <script>
+/**
+ * app.js — "The Front Counter"
+ * Works in three storage modes automatically:
+ * 1. Python local server (http://): saves directly to tasks.json via /api/tasks.
+ * 2. Browser Direct File Access (Edge/Chrome, no Python): click "Open file" or "New file"
+ *    to auto-save straight to a real tasks.json file on your PC or OneDrive.
+ * 3. Browser localStorage fallback: always keeps a backup copy even with zero setup.
+ */
+
+const STORAGE_KEY = "horizon_tasks_v1";
+const SAMPLE_FLAG_KEY = "horizon_samples_dismissed_v1";
+
+let tasks = [];
+let inboxFilter = "all"; // "all" | "dated" | "flexible"
+let useServerApi =
+  window.location.hostname === "127.0.0.1" ||
+  window.location.hostname === "localhost";
+let linkedFileHandle = null; // FileSystemFileHandle when linked in Edge/Chrome without Python
+
+// --- Sample Tasks (for first-time offline / portable launch) ---
+
+function addDaysKey(daysFromToday) {
+  const d = new Date();
+  d.setDate(d.getDate() + daysFromToday);
+  return toDateKey(d);
+}
+
+function createSampleTasks() {
+  const now = Date.now();
+  return [
+    {
+      id: "sample-1",
+      title: "Pay electricity bill",
+      dueDate: addDaysKey(2),
+      status: "today",
+      createdAt: now - 4000,
+      completedAt: null,
+      isSample: true,
+    },
+    {
+      id: "sample-2",
+      title: "Book dentist checkup",
+      dueDate: addDaysKey(11),
+      status: "inbox",
+      createdAt: now - 3000,
+      completedAt: null,
+      isSample: true,
+    },
+    {
+      id: "sample-3",
+      title: "Renew car insurance",
+      dueDate: addDaysKey(34),
+      status: "inbox",
+      createdAt: now - 2000,
+      completedAt: null,
+      isSample: true,
+    },
+    {
+      id: "sample-4",
+      title: "Plan spring trip & flights",
+      dueDate: addDaysKey(74),
+      status: "inbox",
+      createdAt: now - 1000,
+      completedAt: null,
+      isSample: true,
+    },
+    {
+      id: "sample-5",
+      title: "Clean up Downloads folder",
+      dueDate: "",
+      status: "inbox",
+      createdAt: now - 500,
+      completedAt: null,
+      isSample: true,
+    },
+  ];
+}
+
+// --- API / Direct File / Browser Storage Layer ---
+
+function supportsDirectFileAccess() {
+  return (
+    typeof window.showOpenFilePicker === "function" &&
+    typeof window.showSaveFilePicker === "function"
+  );
+}
+
+function updateStorageIndicator() {
+  const tag = document.getElementById("storage-tag");
+  const openBtn = document.getElementById("link-file-btn");
+  const newBtn = document.getElementById("new-file-btn");
+
+  if (useServerApi) {
+    tag.textContent = "tasks.json (Python)";
+    tag.classList.add("is-linked");
+    openBtn.classList.add("hidden");
+    newBtn.classList.add("hidden");
+    return;
+  }
+
+  // Offline / portable mode (no Python required)
+  const canLink = supportsDirectFileAccess();
+  openBtn.classList.toggle("hidden", !canLink);
+  newBtn.classList.toggle("hidden", !canLink);
+
+  if (linkedFileHandle) {
+    tag.textContent = `${linkedFileHandle.name} (auto-saving)`;
+    tag.title = "Every change automatically saves directly to this file on your PC.";
+    tag.classList.add("is-linked");
+  } else {
+    tag.textContent = "browser storage";
+    tag.title = canLink
+      ? "Click Open file or New file to auto-save directly to a real tasks.json file."
+      : "Saved in browser storage. Use Export / Import to move tasks.json.";
+    tag.classList.remove("is-linked");
+  }
+}
+
+async function apiRequest(url, options = {}) {
+  const res = await fetch(url, {
+    headers: { "Content-Type": "application/json" },
+    ...options,
+  });
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+async function writeLinkedFile() {
+  if (!linkedFileHandle) return;
+  try {
+    const writable = await linkedFileHandle.createWritable();
+    await writable.write(JSON.stringify(tasks, null, 2) + "\n");
+    await writable.close();
+  } catch (err) {
+    console.warn("Could not write linked tasks.json file:", err);
+  }
+}
+
+async function persistOffline() {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks));
+  } catch (err) {
+    console.warn("Could not save to localStorage:", err);
+  }
+  await writeLinkedFile();
+}
+
+async function linkExistingFile() {
+  if (!supportsDirectFileAccess()) return;
+  try {
+    const [handle] = await window.showOpenFilePicker({
+      types: [{ description: "JSON Tasks File", accept: { "application/json": [".json"] } }],
+      multiple: false,
+    });
+    const file = await handle.getFile();
+    const text = await file.text();
+    const parsed = text.trim() ? JSON.parse(text) : [];
+    if (!Array.isArray(parsed)) {
+      alert("That file doesn't look like a Horizon tasks.json list.");
+      return;
+    }
+    linkedFileHandle = handle;
+    tasks = parsed;
+    localStorage.setItem(SAMPLE_FLAG_KEY, "1");
+    await persistOffline();
+    updateStorageIndicator();
+    renderAll();
+  } catch (err) {
+    if (err && err.name !== "AbortError") {
+      alert("Direct file linking isn't allowed here — use Export / Import instead. Your tasks are still saved in the browser.");
+    }
+  }
+}
+
+async function createLinkedFile() {
+  if (!supportsDirectFileAccess()) return;
+  try {
+    const handle = await window.showSaveFilePicker({
+      suggestedName: "tasks.json",
+      types: [{ description: "JSON Tasks File", accept: { "application/json": [".json"] } }],
+    });
+    linkedFileHandle = handle;
+    await persistOffline();
+    updateStorageIndicator();
+  } catch (err) {
+    if (err && err.name !== "AbortError") {
+      alert("Direct file linking isn't allowed here — use Export / Import instead. Your tasks are still saved in the browser.");
+    }
+  }
+}
+
+async function loadInitialTasks() {
+  if (useServerApi) {
+    try {
+      const data = await apiRequest("/api/tasks");
+      tasks = Array.isArray(data.tasks) ? data.tasks : [];
+      document.getElementById("storage-tag").title = data.dataFile || "Saved directly to tasks.json";
+      updateStorageIndicator();
+      return;
+    } catch (err) {
+      console.warn("Python API unavailable, falling back to browser storage:", err);
+      useServerApi = false;
+    }
+  }
+
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        tasks = parsed;
+        updateStorageIndicator();
+        return;
+      }
+    }
+  } catch {
+    // ignore storage errors
+  }
+
+  // First-time launch without Python: show sample tasks until cleared
+  if (!localStorage.getItem(SAMPLE_FLAG_KEY)) {
+    tasks = createSampleTasks();
+    await persistOffline();
+  } else {
+    tasks = [];
+  }
+  updateStorageIndicator();
+}
+
+// --- Task Actions ---
+
+async function addTask(title, dueDate, putInToday) {
+  const cleanTitle = title.trim();
+  if (!cleanTitle) return;
+
+  // If marked for Today with no explicit date, anchor to Today so it appears on the timeline
+  const resolvedDate = putInToday && !dueDate ? toDateKey(new Date()) : (dueDate || "");
+
+  if (useServerApi) {
+    const data = await apiRequest("/api/tasks", {
+      method: "POST",
+      body: JSON.stringify({ title: cleanTitle, dueDate: resolvedDate, today: putInToday }),
+    });
+    tasks = data.tasks;
+  } else {
+    tasks.unshift({
+      id: `t-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      title: cleanTitle,
+      dueDate: resolvedDate,
+      status: putInToday ? "today" : "inbox",
+      createdAt: Date.now(),
+      completedAt: null,
+    });
+    await persistOffline();
+  }
+  renderAll();
+}
+
+async function updateTask(taskId, patch) {
+  if (useServerApi) {
+    const data = await apiRequest(`/api/tasks/${encodeURIComponent(taskId)}`, {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    });
+    tasks = data.tasks;
+  } else {
+    const t = tasks.find((item) => item.id === taskId);
+    if (!t) return;
+    if (patch.dueDate !== undefined) t.dueDate = patch.dueDate;
+    if (patch.status !== undefined) {
+      t.status = patch.status;
+      t.completedAt = patch.status === "done" ? toDateKey(new Date()) : null;
+      if (patch.status === "today" && !t.dueDate) {
+        t.dueDate = toDateKey(new Date());
+      }
+    }
+    await persistOffline();
+  }
+  renderAll();
+}
+
+async function toggleDone(taskId) {
+  const task = tasks.find((t) => t.id === taskId);
+  if (!task) return;
+  const nextStatus = task.status === "done" ? "today" : "done";
+  await updateTask(taskId, { status: nextStatus });
+}
+
+async function deleteTask(taskId) {
+  if (useServerApi) {
+    const data = await apiRequest(`/api/tasks/${encodeURIComponent(taskId)}`, {
+      method: "DELETE",
+    });
+    tasks = data.tasks;
+  } else {
+    tasks = tasks.filter((t) => t.id !== taskId);
+    await persistOffline();
+  }
+  renderAll();
+}
+
+async function clearCompleted() {
+  if (useServerApi) {
+    const data = await apiRequest("/api/tasks/clear-done", { method: "POST", body: "{}" });
+    tasks = data.tasks;
+  } else {
+    tasks = tasks.filter((t) => t.status !== "done");
+    await persistOffline();
+  }
+  renderAll();
+}
+
+async function clearSamples() {
+  if (useServerApi) {
+    const data = await apiRequest("/api/tasks/clear-samples", { method: "POST", body: "{}" });
+    tasks = data.tasks;
+  } else {
+    tasks = tasks.filter((t) => !t.isSample);
+    localStorage.setItem(SAMPLE_FLAG_KEY, "1");
+    await persistOffline();
+  }
+  renderAll();
+}
+
+// --- Rendering ---
+
+function renderHeader() {
+  document.getElementById("today-label").textContent = new Date().toLocaleDateString("en-US", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  });
+  const hasSamples = tasks.some((t) => t.isSample);
+  document.getElementById("clear-samples-btn").classList.toggle("hidden", !hasSamples);
+}
+
+function renderTimeline() {
+  const monthsEl = document.getElementById("timeline-months");
+  const gridEl = document.getElementById("timeline-grid");
+  const lanesEl = document.getElementById("timeline-lanes");
+  const overdueEl = document.getElementById("overdue-strip");
+
+  monthsEl.innerHTML = "";
+  gridEl.innerHTML = "";
+  lanesEl.innerHTML = "";
+  overdueEl.innerHTML = "";
+
+  // Month axis markers
+  const markers = getMonthMarkers();
+  markers.forEach((m) => {
+    const el = document.createElement("div");
+    el.className = `month-marker${m.isToday ? " is-today" : ""}`;
+    el.style.left = `${m.percent}%`;
+    el.textContent = m.label;
+    monthsEl.appendChild(el);
+
+    if (!m.isToday) {
+      const line = document.createElement("div");
+      line.className = "grid-line is-major";
+      line.style.left = `${m.percent}%`;
+      gridEl.appendChild(line);
+    }
+  });
+
+  // Subtle weekly ticks
+  for (let d = 7; d < HORIZON_DAYS; d += 7) {
+    const tick = document.createElement("div");
+    tick.className = "grid-line";
+    tick.style.left = `${(d / HORIZON_DAYS) * 100}%`;
+    gridEl.appendChild(tick);
+  }
+
+  // Include ALL active tasks with a deadline OR currently in Today's Focus
+  const todayStr = toDateKey(new Date());
+  const timelineTasks = sortTasksByUrgency(
+    tasks.filter((t) => t.status !== "done" && (t.dueDate || t.status === "today"))
+  );
+
+  const overdueTasks = [];
+  const upcomingTasks = [];
+  const beyondHorizon = [];
+
+  timelineTasks.forEach((t) => {
+    const effectiveDate = t.dueDate || todayStr;
+    const days = daysUntil(effectiveDate);
+    if (days < 0) overdueTasks.push({ task: t, days, effectiveDate });
+    else if (days <= HORIZON_DAYS) upcomingTasks.push({ task: t, days, effectiveDate });
+    else beyondHorizon.push({ task: t, days, effectiveDate });
+  });
+
+  document.getElementById("timeline-count").textContent = String(timelineTasks.length);
+
+  // Overdue strip
+  if (overdueTasks.length > 0) {
+    overdueEl.classList.remove("hidden");
+    const label = document.createElement("span");
+    label.className = "overdue-label";
+    label.textContent = "Overdue";
+    overdueEl.appendChild(label);
+
+    overdueTasks.forEach(({ task, days }) => {
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = "overdue-chip";
+      chip.textContent = `${task.title} (${formatDaysLabel(days)})`;
+      chip.title = "Click to move to Today";
+      chip.addEventListener("click", () => updateTask(task.id, { status: "today" }));
+      overdueEl.appendChild(chip);
+    });
+  } else {
+    overdueEl.classList.add("hidden");
+  }
+
+  if (upcomingTasks.length === 0 && beyondHorizon.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "timeline-empty";
+    empty.textContent = "No dated or Today tasks yet.";
+    lanesEl.appendChild(empty);
+    return;
+  }
+
+  upcomingTasks.forEach(({ task, days, effectiveDate }) => {
+    const lane = document.createElement("div");
+    lane.className = "timeline-lane";
+
+    const style = getGradientStyle(days);
+    const widthPct = getTimelineWidthPercent(days);
+    const labelOutside = widthPct < 34;
+
+    const bar = document.createElement("button");
+    bar.type = "button";
+    bar.className = "timeline-bar";
+    bar.style.width = `${widthPct}%`;
+    bar.style.background = style.background;
+    bar.style.borderRightColor = style.borderColor;
+    bar.style.color = style.textColor;
+    bar.title = `${task.title} — ${formatShortDate(effectiveDate)} (${formatDaysLabel(days)}). Click to pull into Today.`;
+    bar.addEventListener("click", () => updateTask(task.id, { status: "today" }));
+
+    const titleText = task.status === "today" ? `★ ${task.title}` : task.title;
+    const metaText = `${formatShortDate(effectiveDate)} · ${formatDaysLabel(days)}`;
+
+    if (labelOutside) {
+      const outside = document.createElement("button");
+      outside.type = "button";
+      outside.className = "timeline-outside-label";
+      outside.title = bar.title;
+      outside.addEventListener("click", () => updateTask(task.id, { status: "today" }));
+
+      const titleSpan = document.createElement("span");
+      titleSpan.className = "timeline-outside-title";
+      titleSpan.textContent = titleText;
+
+      const metaSpan = document.createElement("span");
+      metaSpan.className = "timeline-outside-meta";
+      metaSpan.style.color = style.badgeColor;
+      metaSpan.textContent = metaText;
+
+      outside.appendChild(titleSpan);
+      outside.appendChild(metaSpan);
+      lane.appendChild(bar);
+      lane.appendChild(outside);
+    } else {
+      const titleSpan = document.createElement("span");
+      titleSpan.className = "timeline-bar-label";
+      titleSpan.textContent = titleText;
+
+      const metaSpan = document.createElement("span");
+      metaSpan.className = "timeline-bar-meta";
+      metaSpan.textContent = metaText;
+
+      bar.appendChild(titleSpan);
+      bar.appendChild(metaSpan);
+      lane.appendChild(bar);
+    }
+
+    lanesEl.appendChild(lane);
+  });
+
+  if (beyondHorizon.length > 0) {
+    const note = document.createElement("div");
+    note.className = "timeline-beyond-note";
+    note.textContent =
+      `Beyond 90d: ` +
+      beyondHorizon
+        .map(({ task, days, effectiveDate }) => `${task.title} (${formatShortDate(effectiveDate)}, ${days}d)`)
+        .join(" · ");
+    lanesEl.appendChild(note);
+  }
+}
+
+function buildTaskRow(task, context) {
+  const li = document.createElement("li");
+  li.className = `task-item${task.status === "done" ? " is-done" : ""}`;
+
+  const checkbox = document.createElement("input");
+  checkbox.type = "checkbox";
+  checkbox.className = "task-checkbox";
+  checkbox.checked = task.status === "done";
+  checkbox.setAttribute("aria-label", `Mark "${task.title}" as done`);
+  checkbox.addEventListener("change", () => toggleDone(task.id));
+
+  const body = document.createElement("div");
+  body.className = "task-body";
+
+  const titleEl = document.createElement("span");
+  titleEl.className = "task-title";
+  titleEl.textContent = task.title;
+  body.appendChild(titleEl);
+
+  if (task.status === "done" && task.completedAt) {
+    const doneSpan = document.createElement("span");
+    doneSpan.className = "done-date";
+    doneSpan.textContent = formatShortDate(task.completedAt);
+    body.appendChild(doneSpan);
+  } else if (task.dueDate) {
+    const days = daysUntil(task.dueDate);
+    const style = getGradientStyle(days);
+    const tag = document.createElement("span");
+    tag.className = "due-tag";
+    tag.style.background = style.badgeBg;
+    tag.style.color = style.badgeColor;
+    tag.textContent = `${formatShortDate(task.dueDate)} · ${formatDaysLabel(days)}`;
+    body.appendChild(tag);
+  }
+
+  const actions = document.createElement("div");
+  actions.className = "task-actions";
+
+  if (task.status !== "done") {
+    const dateInput = document.createElement("input");
+    dateInput.type = "date";
+    dateInput.className = "inline-date-input";
+    dateInput.value = task.dueDate || "";
+    dateInput.title = "Change deadline";
+    dateInput.addEventListener("change", (e) => updateTask(task.id, { dueDate: e.target.value }));
+    actions.appendChild(dateInput);
+
+    const moveBtn = document.createElement("button");
+    moveBtn.type = "button";
+    moveBtn.className = "row-btn";
+    moveBtn.textContent = context === "inbox" ? "→ Today" : "Later";
+    moveBtn.addEventListener("click", () =>
+      updateTask(task.id, { status: context === "inbox" ? "today" : "inbox" })
+    );
+    actions.appendChild(moveBtn);
+  }
+
+  const delBtn = document.createElement("button");
+  delBtn.type = "button";
+  delBtn.className = "row-btn del";
+  delBtn.textContent = "×";
+  delBtn.setAttribute("aria-label", `Delete "${task.title}"`);
+  delBtn.addEventListener("click", () => deleteTask(task.id));
+  actions.appendChild(delBtn);
+
+  li.appendChild(checkbox);
+  li.appendChild(body);
+  li.appendChild(actions);
+  return li;
+}
+
+function renderLists() {
+  const todayTasks = sortTasksByUrgency(tasks.filter((t) => t.status === "today"));
+  const allInboxTasks = sortTasksByUrgency(tasks.filter((t) => t.status === "inbox"));
+  const doneTasks = tasks
+    .filter((t) => t.status === "done")
+    .sort((a, b) => (b.completedAt || "").localeCompare(a.completedAt || ""));
+
+  const visibleInbox = allInboxTasks.filter((t) => {
+    if (inboxFilter === "dated") return Boolean(t.dueDate);
+    if (inboxFilter === "flexible") return !t.dueDate;
+    return true;
+  });
+
+  // Today
+  const todayListEl = document.getElementById("today-list");
+  todayListEl.innerHTML = "";
+  todayTasks.forEach((t) => todayListEl.appendChild(buildTaskRow(t, "today")));
+  document.getElementById("today-count").textContent = String(todayTasks.length);
+  document.getElementById("today-empty").classList.toggle("hidden", todayTasks.length > 0);
+
+  const nudge = document.getElementById("focus-nudge");
+  if (todayTasks.length > 3) {
+    nudge.textContent = `${todayTasks.length} in focus — trim to 3?`;
+    nudge.classList.add("is-heavy");
+  } else {
+    nudge.textContent = "1–3 focus items";
+    nudge.classList.remove("is-heavy");
+  }
+
+  // Inbox
+  const inboxListEl = document.getElementById("inbox-list");
+  inboxListEl.innerHTML = "";
+  visibleInbox.forEach((t) => inboxListEl.appendChild(buildTaskRow(t, "inbox")));
+  document.getElementById("inbox-count").textContent = String(allInboxTasks.length);
+  document.getElementById("inbox-empty").classList.toggle("hidden", visibleInbox.length > 0);
+
+  // Done
+  const doneListEl = document.getElementById("done-list");
+  doneListEl.innerHTML = "";
+  doneTasks.slice(0, 12).forEach((t) => doneListEl.appendChild(buildTaskRow(t, "done")));
+  const weeklyWins = countCompletedThisWeek(tasks);
+  document.getElementById("wins-week-badge").textContent = `${weeklyWins} this week`;
+  document.getElementById("done-empty").classList.toggle("hidden", doneTasks.length > 0);
+  document.getElementById("clear-done-btn").classList.toggle("hidden", doneTasks.length === 0);
+}
+
+function renderAll() {
+  renderHeader();
+  renderTimeline();
+  renderLists();
+}
+
+// --- Export / Import ---
+
+function exportJson() {
+  const blob = new Blob([JSON.stringify(tasks, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `horizon-tasks-${toDateKey(new Date())}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function importJson(file) {
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = async () => {
+    try {
+      const parsed = JSON.parse(String(reader.result));
+      if (!Array.isArray(parsed)) throw new Error("Expected a JSON list");
+      if (useServerApi) {
+        const data = await apiRequest("/api/tasks/import", {
+          method: "POST",
+          body: JSON.stringify({ tasks: parsed }),
+        });
+        tasks = data.tasks;
+      } else {
+        tasks = parsed;
+        localStorage.setItem(SAMPLE_FLAG_KEY, "1");
+        await persistOffline();
+      }
+      renderAll();
+    } catch {
+      alert("That file doesn't look like a valid tasks.json list.");
+    }
+  };
+  reader.readAsText(file);
+}
+
+// --- Init ---
+
+async function init() {
+  await loadInitialTasks();
+  renderAll();
+
+  const form = document.getElementById("add-task-form");
+  const titleInput = document.getElementById("task-title-input");
+  const dateInput = document.getElementById("task-date-input");
+  const todayInput = document.getElementById("task-today-input");
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    await addTask(titleInput.value, dateInput.value, todayInput.checked);
+    titleInput.value = "";
+    dateInput.value = "";
+    todayInput.checked = false;
+    titleInput.focus();
+  });
+
+  document.getElementById("link-file-btn").addEventListener("click", linkExistingFile);
+  document.getElementById("new-file-btn").addEventListener("click", createLinkedFile);
+  document.getElementById("clear-samples-btn").addEventListener("click", clearSamples);
+  document.getElementById("clear-done-btn").addEventListener("click", clearCompleted);
+  document.getElementById("export-btn").addEventListener("click", exportJson);
+  document.getElementById("import-input").addEventListener("change", (e) => {
+    importJson(e.target.files[0]);
+    e.target.value = "";
+  });
+
+  document.querySelectorAll(".filter-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      inboxFilter = btn.dataset.filter;
+      document.querySelectorAll(".filter-btn").forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      renderLists();
+    });
+  });
+}
+
+document.addEventListener("DOMContentLoaded", init);
+
+  </script>
+</body>
+</html>
