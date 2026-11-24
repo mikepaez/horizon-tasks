@@ -17,7 +17,13 @@ def build_portable(base_dir: Path = BASE_DIR, output_file: Path = OUTPUT_FILE) -
     logic_js = (base_dir / "logic.js").read_text(encoding="utf-8")
     app_js = (base_dir / "app.js").read_text(encoding="utf-8")
 
-    # Replace external CSS link and external script tags with inline blocks
+    # Guard against closing tags inside inlined assets breaking the single-file bundle
+    if "</style>" in css.lower():
+        raise RuntimeError("styles.css contains '</style>', which would break inline bundling.")
+    for name, src in (("logic.js", logic_js), ("app.js", app_js)):
+        if "</script>" in src.lower():
+            raise RuntimeError(f"{name} contains '</script>', which would break inline bundling.")
+
     css_tag = '<link rel="stylesheet" href="styles.css" />'
     logic_tag = '<script src="logic.js"></script>'
     app_tag = '<script src="app.js"></script>'
