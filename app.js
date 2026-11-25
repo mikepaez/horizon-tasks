@@ -20,7 +20,6 @@ const IDB_HANDLE_KEY = "linkedFile";
 const MAX_UNDO_STEPS = 15;
 const MTIME_TOLERANCE_MS = 50;
 const UNDO_COALESCE_MS = 1500;
-const ALLOWED_HORIZONS = [30, 90, 180];
 const RECURRENCE_OPTIONS = [
   { value: "", label: "None" },
   { value: "weekly", label: "Weekly" },
@@ -132,12 +131,46 @@ function handleServerNetworkError(err, actionName = "save changes") {
 
 function loadSavedHorizonDays() {
   try {
-    const saved = Number(localStorage.getItem(HORIZON_ZOOM_KEY));
-    if (ALLOWED_HORIZONS.includes(saved)) return saved;
+    return parseHorizonDays(localStorage.getItem(HORIZON_ZOOM_KEY), HORIZON_DAYS);
   } catch {
     // ignore storage access issues
   }
   return HORIZON_DAYS;
+}
+
+function setHorizonDays(rawValue) {
+  const nextDays = parseHorizonDays(rawValue, horizonDays);
+  const changed = nextDays !== horizonDays;
+  horizonDays = nextDays;
+  const inputEl = document.getElementById("horizon-days-input");
+  if (inputEl) {
+    inputEl.value = String(horizonDays);
+  }
+  if (changed) {
+    try {
+      localStorage.setItem(HORIZON_ZOOM_KEY, String(horizonDays));
+    } catch {
+      // ignore storage errors
+    }
+    renderTimeline();
+    renderLists();
+  }
+}
+
+function setHorizonMenuOpen(open) {
+  const menu = document.getElementById("horizon-preset-menu");
+  const toggle = document.getElementById("horizon-preset-toggle");
+  const input = document.getElementById("horizon-days-input");
+  if (!menu || !toggle || !input) return;
+  const isOpen = Boolean(open);
+  menu.classList.toggle("hidden", !isOpen);
+  toggle.setAttribute("aria-expanded", String(isOpen));
+  input.setAttribute("aria-expanded", String(isOpen));
+}
+
+function isHorizonMenuOpen() {
+  const menu = document.getElementById("horizon-preset-menu");
+  return Boolean(menu && !menu.classList.contains("hidden"));
 }
 
 function extractSafeUrls(notesText) {
@@ -1259,12 +1292,6 @@ function renderFilterBar() {
 
 // --- Rendering ---
 
-function getHorizonHeadingText(days) {
-  if (days === 30) return "30-Day Horizon";
-  if (days === 180) return "6-Month Horizon";
-  return "3-Month Horizon";
-}
-
 function renderHeader() {
   const now = new Date();
   document.getElementById("today-label").textContent = now.toLocaleDateString("en-US", {
@@ -1322,10 +1349,15 @@ function renderTimeline() {
 
   document.getElementById("horizon-heading").textContent = getHorizonHeadingText(horizonDays);
   document.getElementById("legend-horizon-label").textContent = `${horizonDays}d`;
-  document.querySelectorAll(".zoom-btn").forEach((btn) => {
-    const isActive = Number(btn.dataset.horizon) === horizonDays;
-    btn.classList.toggle("active", isActive);
-    btn.setAttribute("aria-pressed", String(isActive));
+
+  const horizonInput = document.getElementById("horizon-days-input");
+  if (horizonInput && document.activeElement !== horizonInput) {
+    horizonInput.value = String(horizonDays);
+  }
+  document.querySelectorAll(".horizon-preset-option").forEach((opt) => {
+    const isActive = Number(opt.dataset.horizon) === horizonDays;
+    opt.classList.toggle("active", isActive);
+    opt.setAttribute("aria-selected", String(isActive));
   });
 
   monthsEl.replaceChildren();
@@ -1336,31 +1368,26 @@ function renderTimeline() {
   const now = new Date();
   const todayStr = toDateKey(now);
 
-  // Month axis markers
-  const markers = getMonthMarkers(now, horizonDays);
+  // Adaptive axis markers & vertical grid lines
+  const { markers, gridLines } = getTimelineAxis(now, horizonDays);
   markers.forEach((m) => {
     const el = document.createElement("div");
-    el.className = `month-marker${m.isToday ? " is-today" : ""}`;
+    const cls = ["month-marker"];
+    if (m.isToday) cls.push("is-today");
+    else if (m.isAccent) cls.push("is-accent");
+    else if (!m.isMajor) cls.push("is-minor");
+    el.className = cls.join(" ");
     el.style.left = `${m.percent}%`;
     el.textContent = m.label;
     monthsEl.appendChild(el);
-
-    if (!m.isToday) {
-      const line = document.createElement("div");
-      line.className = "grid-line is-major";
-      line.style.left = `${m.percent}%`;
-      gridEl.appendChild(line);
-    }
   });
 
-  // Subtle interval ticks
-  const tickStep = horizonDays > 90 ? 14 : 7;
-  for (let d = tickStep; d < horizonDays; d += tickStep) {
-    const tick = document.createElement("div");
-    tick.className = "grid-line";
-    tick.style.left = `${(d / horizonDays) * 100}%`;
-    gridEl.appendChild(tick);
-  }
+  gridLines.forEach((g) => {
+    const line = document.createElement("div");
+    line.className = `grid-line${g.isMajor ? " is-major" : ""}`;
+    line.style.left = `${g.percent}%`;
+    gridEl.appendChild(line);
+  });
 
   // Active tasks with a deadline OR currently in Today's Focus, filtered by search/#tag
   const timelineTasks = sortTasksByUrgency(
@@ -2292,20 +2319,92 @@ async function init() {
     renderAll();
   });
 
-  // Horizon Zoom Switcher
-  document.querySelectorAll(".zoom-btn").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const nextDays = Number(btn.dataset.horizon);
-      if (!ALLOWED_HORIZONS.includes(nextDays)) return;
-      horizonDays = nextDays;
-      try {
-        localStorage.setItem(HORIZON_ZOOM_KEY, String(horizonDays));
-      } catch {
-        // ignore
-      }
-      renderTimeline();
-      renderLists();
+  // Custom Horizon Days Input & Preset Dropdown (no scroll-wheel binding)
+  const horizonRangeEl = document.getElementById("horizon-range");
+  const horizonDaysInput = document.getElementById("horizon-days-input");
+  const horizonPresetToggle = document.getElementById("horizon-preset-toggle");
+  const horizonPresetOptions = Array.from(document.querySelectorAll(".horizon-preset-option"));
+
+  let horizonEditCancelled = false;
+  horizonDaysInput.addEventListener("focus", () => {
+    horizonDaysInput.select();
+  });
+  horizonDaysInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      setHorizonDays(horizonDaysInput.value);
+      setHorizonMenuOpen(false);
+      horizonDaysInput.blur();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      horizonEditCancelled = true;
+      horizonDaysInput.value = String(horizonDays);
+      setHorizonMenuOpen(false);
+      horizonDaysInput.blur();
+    } else if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setHorizonMenuOpen(true);
+      const activeOpt =
+        horizonPresetOptions.find((opt) => opt.classList.contains("active")) ||
+        horizonPresetOptions[0];
+      if (activeOpt) activeOpt.focus();
+    }
+  });
+  horizonDaysInput.addEventListener("blur", (e) => {
+    if (horizonEditCancelled) {
+      horizonEditCancelled = false;
+      return;
+    }
+    if (e.relatedTarget && horizonRangeEl.contains(e.relatedTarget)) {
+      return;
+    }
+    setHorizonDays(horizonDaysInput.value);
+  });
+
+  horizonPresetToggle.addEventListener("mousedown", (e) => {
+    e.preventDefault();
+  });
+  horizonPresetToggle.addEventListener("click", () => {
+    const nextOpen = !isHorizonMenuOpen();
+    setHorizonMenuOpen(nextOpen);
+  });
+
+  horizonPresetOptions.forEach((opt, idx) => {
+    opt.addEventListener("mousedown", (e) => {
+      e.preventDefault();
     });
+    opt.addEventListener("click", () => {
+      setHorizonDays(Number(opt.dataset.horizon));
+      setHorizonMenuOpen(false);
+      horizonDaysInput.blur();
+    });
+    opt.addEventListener("keydown", (e) => {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        horizonPresetOptions[(idx + 1) % horizonPresetOptions.length].focus();
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        horizonPresetOptions[(idx - 1 + horizonPresetOptions.length) % horizonPresetOptions.length].focus();
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        setHorizonMenuOpen(false);
+        horizonDaysInput.focus();
+      }
+    });
+  });
+
+  document.addEventListener("pointerdown", (e) => {
+    if (isHorizonMenuOpen() && !horizonRangeEl.contains(e.target)) {
+      setHorizonMenuOpen(false);
+    }
+  });
+
+  horizonRangeEl.addEventListener("focusout", (e) => {
+    if (!e.relatedTarget || !horizonRangeEl.contains(e.relatedTarget)) {
+      setHorizonMenuOpen(false);
+    }
   });
 
   // Timeline & Done "Show all (N) / Show less" toggles
@@ -2367,6 +2466,10 @@ async function init() {
     const activeEl = document.activeElement;
 
     if (e.key === "Escape") {
+      if (isHorizonMenuOpen()) {
+        setHorizonMenuOpen(false);
+        return;
+      }
       if (
         activeEl &&
         (activeEl.tagName === "INPUT" ||

@@ -144,6 +144,100 @@ section("month markers across 3 months", () => {
   assert.strictEqual(markers[0].isToday, true);
 });
 
+section("parseHorizonDays and custom horizon headings", () => {
+  assert.strictEqual(logic.parseHorizonDays(14), 14);
+  assert.strictEqual(logic.parseHorizonDays("14"), 14);
+  assert.strictEqual(logic.parseHorizonDays(" 365d "), 365);
+  assert.strictEqual(logic.parseHorizonDays(1), 1);
+  assert.strictEqual(logic.parseHorizonDays(9999), logic.MAX_HORIZON_DAYS);
+  assert.strictEqual(logic.parseHorizonDays(0, 30), 30);
+  assert.strictEqual(logic.parseHorizonDays(-5, 30), 30);
+  assert.strictEqual(logic.parseHorizonDays("abc", 14), 14);
+  assert.strictEqual(logic.parseHorizonDays("", 90), 90);
+  assert.strictEqual(logic.parseHorizonDays(null), logic.HORIZON_DAYS);
+
+  assert.strictEqual(logic.getHorizonHeadingText(1), "1-Day Horizon");
+  assert.strictEqual(logic.getHorizonHeadingText(7), "1-Week Horizon");
+  assert.strictEqual(logic.getHorizonHeadingText(14), "2-Week Horizon");
+  assert.strictEqual(logic.getHorizonHeadingText(21), "3-Week Horizon");
+  assert.strictEqual(logic.getHorizonHeadingText(30), "30-Day Horizon");
+  assert.strictEqual(logic.getHorizonHeadingText(45), "45-Day Horizon");
+  assert.strictEqual(logic.getHorizonHeadingText(90), "3-Month Horizon");
+  assert.strictEqual(logic.getHorizonHeadingText(180), "6-Month Horizon");
+  assert.strictEqual(logic.getHorizonHeadingText(365), "1-Year Horizon");
+  assert.strictEqual(logic.getHorizonHeadingText(730), "2-Year Horizon");
+});
+
+section("adaptive timeline axis across short, medium, classic, and long custom ranges", () => {
+  const nov25 = new Date(2026, 10, 25); // Wed Nov 25, 2026
+
+  // 14-day (2-week) view: daily grid lines + non-overlapping Option B landmarks
+  const ax14 = logic.getTimelineAxis(nov25, 14);
+  assert.strictEqual(ax14.gridLines.length, 13, "14d should have a subtle grid line for every intermediate day");
+  assert.strictEqual(ax14.markers[0].label, "Today");
+  assert.ok(ax14.markers.some((m) => m.label === "Dec 1" && m.isAccent), "1st of month should be accented");
+  assert.ok(ax14.markers.some((m) => m.label === "Mon 7" && m.isAccent), "Monday landmark should be accented");
+  assert.ok(ax14.markers.length >= 4 && ax14.markers.length <= 6, "14d Option B should stay light and balanced");
+  for (let i = 1; i < ax14.markers.length; i++) {
+    assert.ok(
+      ax14.markers[i].percent - ax14.markers[i - 1].percent >= 15,
+      `14d labels must stay >= 15% apart: ${JSON.stringify(ax14.markers)}`
+    );
+  }
+
+  // 7-day (1-week) view: daily grid + spaced landmarks
+  const ax7 = logic.getTimelineAxis(nov25, 7);
+  assert.strictEqual(ax7.gridLines.length, 6);
+  assert.ok(ax7.markers.length >= 3, "7d should show Today plus intermediate day landmarks");
+  for (let i = 1; i < ax7.markers.length; i++) {
+    assert.ok(ax7.markers[i].percent - ax7.markers[i - 1].percent >= 15);
+  }
+
+  // Edge case: 1-day view works cleanly without division errors
+  const ax1 = logic.getTimelineAxis(nov25, 1);
+  assert.deepStrictEqual(ax1.markers.map((m) => m.label), ["Today"]);
+  assert.strictEqual(ax1.gridLines.length, 0);
+
+  // 30-day view starting mid-month (no 1st of month inside 1..29) still shows helpful date landmarks
+  const dec2 = new Date(2026, 11, 2);
+  const ax30NoMonth = logic.getTimelineAxis(dec2, 30);
+  assert.ok(ax30NoMonth.markers.length >= 3, "30d without a month boundary should still show date landmarks");
+  for (let i = 1; i < ax30NoMonth.markers.length; i++) {
+    assert.ok(ax30NoMonth.markers[i].percent - ax30NoMonth.markers[i - 1].percent >= 16);
+  }
+
+  // 90-day classic view matches getMonthMarkers
+  const ax90 = logic.getTimelineAxis(fixedToday, 90);
+  assert.deepStrictEqual(
+    ax90.markers.map((m) => m.label),
+    logic.getMonthMarkers(fixedToday, 90).map((m) => m.label)
+  );
+
+  // 365-day (1-year) view: compact month labels with Jan '27 and no overlap
+  const ax365 = logic.getTimelineAxis(nov25, 365);
+  assert.ok(ax365.markers.some((m) => m.label === "Jan '27"), "1-year view should label Jan '27 compactly");
+  assert.ok(ax365.markers.length >= 10, "1-year view should display ~11 upcoming months");
+  assert.strictEqual(ax365.gridLines.length, 12, "1-year view should have 12 monthly grid lines");
+  for (let i = 1; i < ax365.markers.length; i++) {
+    assert.ok(ax365.markers[i].percent - ax365.markers[i - 1].percent >= 7.5);
+  }
+
+  // 730-day (2-year) view: auto-thins labels to avoid crowding while keeping monthly grid lines
+  const ax730 = logic.getTimelineAxis(nov25, 730);
+  assert.ok(ax730.markers.some((m) => m.label === "Jan '28"), "2-year view should anchor Jan '28");
+  assert.strictEqual(ax730.gridLines.length, 24, "2-year view should keep all 24 monthly grid lines");
+  for (let i = 1; i < ax730.markers.length; i++) {
+    assert.ok(ax730.markers[i].percent - ax730.markers[i - 1].percent >= 7.5);
+  }
+
+  // Short-horizon bar text contrast (7d, 14d, 365d)
+  [5, 9, 13].forEach((d) => {
+    assert.strictEqual(logic.getGradientStyle(d, 14).textColor, "#231e18", `${d}d on 14d must use dark ink`);
+  });
+  assert.strictEqual(logic.getGradientStyle(0, 14).textColor, "#fdfaf4");
+  assert.strictEqual(logic.getGradientStyle(0, 365).textColor, "#fdfaf4");
+});
+
 section("sorting by urgency", () => {
   const sorted = logic.sortTasksByUrgency(
     [

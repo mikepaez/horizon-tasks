@@ -490,7 +490,7 @@ label.text-btn:focus-within {
   font-size: 11px;
 }
 
-/* Paper Desk Horizon Header & Zoom Switcher */
+/* Paper Desk Horizon Header & Custom Days Range Control */
 .horizon-head-right {
   display: inline-flex;
   align-items: center;
@@ -498,36 +498,126 @@ label.text-btn:focus-within {
   flex-wrap: wrap;
 }
 
-.zoom-switcher {
+.horizon-range {
   display: inline-flex;
   align-items: center;
-  gap: 1px;
+  gap: 5px;
+}
+
+.horizon-range-label {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--soft);
+  user-select: none;
+}
+
+.horizon-combo {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 3px;
-  padding: 1px;
+  transition: border-color 0.12s ease, background 0.12s ease;
 }
 
-.zoom-btn {
-  font-family: var(--mono);
-  font-size: 10px;
-  color: var(--muted);
-  background: transparent;
-  border: none;
-  border-radius: 2px;
-  padding: 1px 6px;
-  line-height: 1.4;
-}
-
-.zoom-btn:hover {
-  color: var(--ink);
-}
-
-.zoom-btn.active {
+.horizon-combo:focus-within {
+  border-color: var(--ink);
   background: var(--surface);
+}
+
+.horizon-days-input {
+  width: 38px;
+  border: none;
+  background: transparent;
   color: var(--ink);
+  font-family: var(--mono);
+  font-size: 11px;
   font-weight: 700;
-  box-shadow: 0 0 0 1px var(--border-strong);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  padding: 2px 1px 2px 5px;
+  outline: none;
+}
+
+.horizon-days-input:focus-visible {
+  outline: none;
+}
+
+.horizon-days-unit {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--muted);
+  padding: 0 3px 0 1px;
+  user-select: none;
+}
+
+.horizon-preset-toggle {
+  border: none;
+  border-left: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1;
+  padding: 3px 6px;
+  border-radius: 0 2px 2px 0;
+}
+
+.horizon-preset-toggle:hover,
+.horizon-preset-toggle[aria-expanded="true"] {
+  background: var(--surface-alt);
+  color: var(--ink);
+}
+
+.horizon-preset-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 50;
+  min-width: 132px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: 0 6px 16px rgba(35, 30, 24, 0.12);
+  padding: 3px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.horizon-preset-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  border: none;
+  background: transparent;
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 4px 7px;
+  border-radius: 2px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.horizon-preset-option:hover,
+.horizon-preset-option:focus-visible {
+  background: var(--surface-alt);
+}
+
+.horizon-preset-option.active {
+  background: var(--bg);
+  font-weight: 700;
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+}
+
+.preset-hint {
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--soft);
 }
 
 .legend {
@@ -650,6 +740,17 @@ label.text-btn:focus-within {
   border-left: 2px solid var(--ink);
   color: var(--ink);
   font-weight: 700;
+}
+
+.month-marker.is-accent {
+  border-left: 1px solid var(--border-strong);
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.month-marker.is-minor {
+  border-left: 1px solid var(--border);
+  color: var(--soft);
 }
 
 .timeline-grid {

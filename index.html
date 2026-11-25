@@ -101,10 +101,43 @@
           <span class="meta-mono" id="timeline-count">0</span>
         </div>
         <div class="horizon-head-right">
-          <div class="zoom-switcher" role="group" aria-label="Horizon zoom">
-            <button type="button" class="zoom-btn" data-horizon="30">30d</button>
-            <button type="button" class="zoom-btn active" data-horizon="90">90d</button>
-            <button type="button" class="zoom-btn" data-horizon="180">180d</button>
+          <div class="horizon-range" id="horizon-range">
+            <label class="horizon-range-label" for="horizon-days-input">View</label>
+            <div class="horizon-combo">
+              <input
+                type="text"
+                inputmode="numeric"
+                id="horizon-days-input"
+                class="horizon-days-input"
+                value="90"
+                maxlength="4"
+                autocomplete="off"
+                role="combobox"
+                aria-label="Horizon view in days"
+                aria-expanded="false"
+                aria-controls="horizon-preset-menu"
+                aria-autocomplete="none"
+                title="Enter any number of days (1–730) or choose a preset"
+              />
+              <span class="horizon-days-unit" aria-hidden="true">d</span>
+              <button
+                type="button"
+                id="horizon-preset-toggle"
+                class="horizon-preset-toggle"
+                aria-label="Choose horizon preset"
+                aria-expanded="false"
+                aria-controls="horizon-preset-menu"
+                title="Quick presets"
+              >▾</button>
+              <div class="horizon-preset-menu hidden" id="horizon-preset-menu" role="listbox" aria-label="Horizon presets">
+                <button type="button" class="horizon-preset-option" role="option" data-horizon="7"><span>7d</span><span class="preset-hint">1 week</span></button>
+                <button type="button" class="horizon-preset-option" role="option" data-horizon="14"><span>14d</span><span class="preset-hint">2 weeks</span></button>
+                <button type="button" class="horizon-preset-option" role="option" data-horizon="30"><span>30d</span><span class="preset-hint">1 month</span></button>
+                <button type="button" class="horizon-preset-option" role="option" data-horizon="90"><span>90d</span><span class="preset-hint">3 months</span></button>
+                <button type="button" class="horizon-preset-option" role="option" data-horizon="180"><span>180d</span><span class="preset-hint">6 months</span></button>
+                <button type="button" class="horizon-preset-option" role="option" data-horizon="365"><span>365d</span><span class="preset-hint">1 year</span></button>
+              </div>
+            </div>
           </div>
           <div class="legend" aria-hidden="true">
             <span id="legend-horizon-label">90d</span>

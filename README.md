@@ -1,9 +1,9 @@
 # Horizon — Task Organizer & Visual Horizon
 
-A calm, local-first Paper Desk task organizer with a zoomable horizontal deadline stripe (`30d` / `90d` / `180d`) where tasks fade from near-transparent to a solid color block as they approach.
+A calm, local-first Paper Desk task organizer with a customizable horizontal deadline stripe (any range from `1` to `730` days, with quick presets from 1 week to 1 year) where tasks fade from near-transparent to a solid color block as they approach.
 
 ## Features
-- **Visual Horizon (`30d` / `90d` / `180d`):** Watercolor urgency gradient with overdue strip and Do-Date (`Today`) vs. Due-Date separation.
+- **Customizable Visual Horizon (`1`–`730` days):** Type any day count or pick a quick preset (`7d`, `14d`, `30d`, `90d`, `180d`, `365d`), with adaptive day/month axis landmarks, watercolor urgency gradient, overdue strip, and Do-Date (`Today`) vs. Due-Date separation.
 - **Quick Capture & Shortcuts:** Inline `@today`, `@tom` / `@tomorrow`, `@+3d` / `@+2w` / `@+1m`, `#tags`, quick-date pills, plus keyboard shortcuts (`n` add, `/` search, `Ctrl+Z` undo, `Esc` close/blur).
 - **Rich Task Details:** Double-click inline title editing, collapsible paper drawer with notes (auto-linked `http(s)` URLs), mini-checklist subtasks, and recurring tasks (`weekly`, `monthly`, `quarterly`, `yearly`).
 - **Safe Local-First Sync:** Atomic writes + corrupt-file backups in Python mode, IndexedDB file-handle persistence with 1-click Reconnect in portable mode, external-change conflict detection, Merge/Replace import, and multi-step Undo.

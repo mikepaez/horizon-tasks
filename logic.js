@@ -9,6 +9,11 @@
  */
 
 const HORIZON_DAYS = 90; // 3 months zoomed out (default)
+const MIN_HORIZON_DAYS = 1;
+const MAX_HORIZON_DAYS = 730;
+const HORIZON_PRESETS = [7, 14, 30, 90, 180, 365];
+const SHORT_WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const SHORT_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const VALID_RECURRENCES = ["", "weekly", "monthly", "quarterly", "yearly"];
 const LOGIC_VALID_STATUSES = ["inbox", "today", "done"];
 const LOGIC_DATE_KEY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
@@ -160,6 +165,44 @@ function getTimelineWidthPercent(daysLeft, horizonDays = HORIZON_DAYS) {
 }
 
 /**
+ * Parse and clamp a custom horizon length in days (1..730).
+ * Accepts numbers or strings like "14" or "14d". Returns fallback if invalid.
+ */
+function parseHorizonDays(raw, fallback = HORIZON_DAYS) {
+  const safeFallback =
+    typeof fallback === "number" && Number.isFinite(fallback) && fallback >= MIN_HORIZON_DAYS
+      ? Math.min(MAX_HORIZON_DAYS, Math.max(MIN_HORIZON_DAYS, Math.round(fallback)))
+      : HORIZON_DAYS;
+
+  let parsed = NaN;
+  if (typeof raw === "number") {
+    parsed = Number.isFinite(raw) ? Math.round(raw) : NaN;
+  } else if (typeof raw === "string") {
+    const match = /^\s*(\d+)\s*d?\s*$/i.exec(raw);
+    if (match) parsed = parseInt(match[1], 10);
+  }
+
+  if (!Number.isFinite(parsed) || parsed < MIN_HORIZON_DAYS) return safeFallback;
+  return Math.min(MAX_HORIZON_DAYS, Math.max(MIN_HORIZON_DAYS, parsed));
+}
+
+/**
+ * Human-friendly section heading for any horizon length in days.
+ */
+function getHorizonHeadingText(days) {
+  const d = parseHorizonDays(days, HORIZON_DAYS);
+  if (d === 1) return "1-Day Horizon";
+  if (d === 7) return "1-Week Horizon";
+  if (d === 14) return "2-Week Horizon";
+  if (d === 21) return "3-Week Horizon";
+  if (d === 90) return "3-Month Horizon";
+  if (d === 180) return "6-Month Horizon";
+  if (d === 365) return "1-Year Horizon";
+  if (d === 730) return "2-Year Horizon";
+  return `${d}-Day Horizon`;
+}
+
+/**
  * Build the month markers along the horizon strip (Today + each upcoming month's 1st).
  */
 function getMonthMarkers(today = new Date(), horizonDays = HORIZON_DAYS) {
@@ -188,6 +231,285 @@ function getMonthMarkers(today = new Date(), horizonDays = HORIZON_DAYS) {
     }
   }
   return markers;
+}
+
+/**
+ * Adaptive axis labels and vertical grid lines for ANY horizon length (1..730 days).
+ * - Short views (<= 21d): subtle daily grid lines (stronger on Mondays & 1st of month)
+ *   with lighter, non-overlapping date landmarks (Option B).
+ * - Medium views (22..45d): month starts + evenly spaced short date landmarks & weekly grid.
+ * - Classic views (46..240d): month starts + 7d/14d grid ticks.
+ * - Long views (> 240d): compact month/year labels (auto-thinned for 2-year spans) + monthly grid.
+ */
+function getTimelineAxis(today = new Date(), horizonDays = HORIZON_DAYS) {
+  const horizon = parseHorizonDays(horizonDays, HORIZON_DAYS);
+  const start = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const toPercent = (offset) => Number(((offset / horizon) * 100).toFixed(2));
+  const dateAt = (offset) => new Date(start.getFullYear(), start.getMonth(), start.getDate() + offset);
+
+  const markers = [{ label: "Today", percent: 0, isToday: true, isMajor: true, isAccent: false }];
+  const gridLines = [];
+
+  if (horizon <= 21) {
+    const minGapPct = 15;
+    const maxPct = 92;
+    const minDayGap = Math.max(1, Math.ceil((minGapPct / 100) * horizon));
+    const picked = [{ offset: 0, percent: 0 }];
+
+    const canPlace = (pct) =>
+      pct >= minGapPct &&
+      pct <= maxPct &&
+      picked.every((p) => Math.abs(p.percent - pct) >= minGapPct);
+
+    const formatShortLabel = (dt) =>
+      dt.getDate() === 1
+        ? `${SHORT_MONTHS[dt.getMonth()]} 1`
+        : `${SHORT_WEEKDAYS[dt.getDay()]} ${dt.getDate()}`;
+
+    // Subtle daily grid lines; Mondays & 1st of month stand out
+    for (let d = 1; d < horizon; d++) {
+      const dt = dateAt(d);
+      const pct = toPercent(d);
+      const isMajor = dt.getDate() === 1 || dt.getDay() === 1;
+      gridLines.push({ percent: pct, isMajor });
+    }
+
+    // Priority 1: 1st of month landmarks
+    for (let d = 1; d < horizon; d++) {
+      const dt = dateAt(d);
+      const pct = toPercent(d);
+      if (dt.getDate() === 1 && canPlace(pct)) {
+        picked.push({ offset: d, percent: pct, label: formatShortLabel(dt), isMajor: true, isAccent: true });
+      }
+    }
+
+    // Priority 2: Monday landmarks
+    for (let d = 1; d < horizon; d++) {
+      const dt = dateAt(d);
+      const pct = toPercent(d);
+      if (dt.getDay() === 1 && canPlace(pct)) {
+        picked.push({ offset: d, percent: pct, label: formatShortLabel(dt), isMajor: true, isAccent: true });
+      }
+    }
+
+    picked.sort((a, b) => a.offset - b.offset);
+
+    // Priority 3: Fill wide gaps with lighter intermediate day landmarks
+    const anchors = [...picked, { offset: horizon, percent: 100 }];
+    const fillers = [];
+    for (let i = 0; i < anchors.length - 1; i++) {
+      const a = anchors[i];
+      const b = anchors[i + 1];
+      const spanPct = b.percent - a.percent;
+      const spanDays = b.offset - a.offset;
+      if (spanPct < minGapPct * 2 || spanDays < minDayGap * 2) continue;
+
+      const maxPossible = Math.floor(spanDays / minDayGap) - 1;
+      const desired = Math.max(1, Math.round(spanPct / 22) - 1);
+      const count = Math.min(desired, maxPossible);
+      if (count <= 0) continue;
+
+      for (let k = 1; k <= count; k++) {
+        const d = Math.round(a.offset + (spanDays * k) / (count + 1));
+        if (d <= a.offset || d >= b.offset || d >= horizon) continue;
+        const pct = toPercent(d);
+        if (canPlace(pct)) {
+          const dt = dateAt(d);
+          const item = { offset: d, percent: pct, label: formatShortLabel(dt), isMajor: false, isAccent: false };
+          picked.push(item);
+          fillers.push(item);
+        }
+      }
+    }
+
+    picked
+      .filter((p) => p.offset > 0)
+      .sort((a, b) => a.offset - b.offset)
+      .forEach((p) => {
+        markers.push({
+          label: p.label,
+          percent: p.percent,
+          isToday: false,
+          isMajor: p.isMajor,
+          isAccent: p.isAccent,
+        });
+      });
+
+    return { markers, gridLines };
+  }
+
+  if (horizon <= 45) {
+    const minGapPct = 16;
+    const maxPct = 92;
+    const minDayGap = Math.max(1, Math.ceil((minGapPct / 100) * horizon));
+    const majorOffsets = new Set();
+    const picked = [{ offset: 0, percent: 0 }];
+
+    const canPlace = (pct) =>
+      pct >= minGapPct &&
+      pct <= maxPct &&
+      picked.every((p) => Math.abs(p.percent - pct) >= minGapPct);
+
+    for (let d = 1; d < horizon; d++) {
+      const dt = dateAt(d);
+      if (dt.getDate() === 1) {
+        const pct = toPercent(d);
+        majorOffsets.add(d);
+        gridLines.push({ percent: pct, isMajor: true });
+        if (pct >= 10 && pct <= maxPct) {
+          const label =
+            dt.getMonth() === 0
+              ? `${SHORT_MONTHS[0]} ${dt.getFullYear()}`
+              : SHORT_MONTHS[dt.getMonth()];
+          picked.push({ offset: d, percent: pct, label, isMajor: true, isAccent: true });
+        }
+      }
+    }
+
+    for (let d = 7; d < horizon; d += 7) {
+      if (!majorOffsets.has(d)) {
+        gridLines.push({ percent: toPercent(d), isMajor: false });
+      }
+    }
+    gridLines.sort((a, b) => a.percent - b.percent);
+
+    picked.sort((a, b) => a.offset - b.offset);
+    const anchors = [...picked, { offset: horizon, percent: 100 }];
+    for (let i = 0; i < anchors.length - 1; i++) {
+      const a = anchors[i];
+      const b = anchors[i + 1];
+      const spanPct = b.percent - a.percent;
+      const spanDays = b.offset - a.offset;
+      if (spanPct < minGapPct * 2 || spanDays < minDayGap * 2) continue;
+
+      const maxPossible = Math.floor(spanDays / minDayGap) - 1;
+      const desired = Math.max(1, Math.round(spanPct / 26) - 1);
+      const count = Math.min(desired, maxPossible);
+      if (count <= 0) continue;
+
+      for (let k = 1; k <= count; k++) {
+        let d = Math.round(a.offset + (spanDays * k) / (count + 1));
+        // Nudge by up to +-2 days to land on a Monday if it stays well-spaced
+        for (const delta of [0, -1, 1, -2, 2]) {
+          const cand = d + delta;
+          if (cand > a.offset && cand < b.offset && cand < horizon) {
+            if (dateAt(cand).getDay() === 1 && canPlace(toPercent(cand))) {
+              d = cand;
+              break;
+            }
+          }
+        }
+        if (d <= a.offset || d >= b.offset || d >= horizon) continue;
+        const pct = toPercent(d);
+        if (canPlace(pct)) {
+          const dt = dateAt(d);
+          picked.push({
+            offset: d,
+            percent: pct,
+            label: `${SHORT_MONTHS[dt.getMonth()]} ${dt.getDate()}`,
+            isMajor: false,
+            isAccent: false,
+          });
+        }
+      }
+    }
+
+    picked
+      .filter((p) => p.offset > 0)
+      .sort((a, b) => a.offset - b.offset)
+      .forEach((p) => {
+        markers.push({
+          label: p.label,
+          percent: p.percent,
+          isToday: false,
+          isMajor: p.isMajor,
+          isAccent: p.isAccent,
+        });
+      });
+
+    return { markers, gridLines };
+  }
+
+  if (horizon <= 240) {
+    const monthMarkers = getMonthMarkers(start, horizon);
+    monthMarkers.forEach((m) => {
+      if (!m.isToday) {
+        markers.push({
+          label: m.label,
+          percent: m.percent,
+          isToday: false,
+          isMajor: true,
+          isAccent: false,
+        });
+        gridLines.push({ percent: m.percent, isMajor: true });
+      }
+    });
+
+    const tickStep = horizon > 90 ? 14 : 7;
+    for (let d = tickStep; d < horizon; d += tickStep) {
+      gridLines.push({ percent: toPercent(d), isMajor: false });
+    }
+    gridLines.sort((a, b) => a.percent - b.percent);
+    return { markers, gridLines };
+  }
+
+  // Long range (> 240d, e.g. 365d / 730d): monthly grid, compact labels, auto-thinned if > 1 year
+  const minGapPct = 7.5;
+  const maxPct = 94;
+  const monthStarts = [];
+  for (let d = 1; d < horizon; d++) {
+    const dt = dateAt(d);
+    if (dt.getDate() === 1) {
+      const pct = toPercent(d);
+      const isJan = dt.getMonth() === 0;
+      const shortYear = String(dt.getFullYear()).slice(-2);
+      const label = isJan ? `${SHORT_MONTHS[0]} '${shortYear}` : SHORT_MONTHS[dt.getMonth()];
+      monthStarts.push({ offset: d, percent: pct, isJan, label });
+    }
+  }
+
+  const picked = [{ offset: 0, percent: 0 }];
+  const canPlace = (pct) =>
+    pct >= minGapPct &&
+    pct <= maxPct &&
+    picked.every((p) => Math.abs(p.percent - pct) >= minGapPct);
+
+  // Anchor January year rollovers first
+  monthStarts.forEach((m) => {
+    if (m.isJan && canPlace(m.percent)) {
+      picked.push({ ...m, isMajor: true, isAccent: true });
+    }
+  });
+
+  // Fill remaining months cleanly
+  monthStarts.forEach((m) => {
+    if (!m.isJan && canPlace(m.percent)) {
+      picked.push({ ...m, isMajor: true, isAccent: false });
+    }
+  });
+
+  const labeledOffsets = new Set(picked.filter((p) => p.offset > 0).map((p) => p.offset));
+  monthStarts.forEach((m) => {
+    gridLines.push({
+      percent: m.percent,
+      isMajor: m.isJan || labeledOffsets.has(m.offset),
+    });
+  });
+
+  picked
+    .filter((p) => p.offset > 0)
+    .sort((a, b) => a.offset - b.offset)
+    .forEach((p) => {
+      markers.push({
+        label: p.label,
+        percent: p.percent,
+        isToday: false,
+        isMajor: true,
+        isAccent: p.isAccent,
+      });
+    });
+
+  return { markers, gridLines };
 }
 
 /**
@@ -536,6 +858,9 @@ function mergeTaskLists(existingList, incomingList) {
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     HORIZON_DAYS,
+    MIN_HORIZON_DAYS,
+    MAX_HORIZON_DAYS,
+    HORIZON_PRESETS,
     VALID_RECURRENCES,
     toDateKey,
     parseDateKey,
@@ -545,7 +870,10 @@ if (typeof module !== "undefined" && module.exports) {
     formatShortDate,
     getGradientStyle,
     getTimelineWidthPercent,
+    parseHorizonDays,
+    getHorizonHeadingText,
     getMonthMarkers,
+    getTimelineAxis,
     countCompletedThisWeek,
     sortTasksByUrgency,
     getNextRecurrenceDate,
