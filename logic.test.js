@@ -369,7 +369,7 @@ for (const horizon of [14, 30, 90, 180, 365]) {
 }
 
 const nov25 = new Date(2026, 10, 25); // Wed Nov 25, 2026
-for (const dSpan of [1, 7, 14, 21, 30, 90, 180, 365, 730]) {
+for (const dSpan of [1, 7, 14, 21, 30, 45, 90, 180, 365, 730]) {
   const startDt = dSpan === 30 ? new Date(2026, 11, 2) : nov25;
   const ax = logic.getTimelineAxis(startDt, dSpan);
   assert.strictEqual(ax.markers[0].label, "Today");
@@ -389,10 +389,13 @@ for (const dSpan of [1, 7, 14, 21, 30, 90, 180, 365, 730]) {
     for (let i = 1; i < ax.markers.length; i++) {
       assert.ok(ax.markers[i].percent - ax.markers[i - 1].percent >= 15);
     }
-  } else if (dSpan === 30) {
-    assert.ok(ax.markers.length >= 3, "30d starting mid-month should still show landmarks");
+  } else if (dSpan <= 45) {
+    assert.ok(ax.markers.length >= 3, `${dSpan}d should show spaced landmarks`);
     for (let i = 1; i < ax.markers.length; i++) {
-      assert.ok(ax.markers[i].percent - ax.markers[i - 1].percent >= 16);
+      assert.ok(
+        ax.markers[i].percent - ax.markers[i - 1].percent >= 16,
+        `${dSpan}d labels must stay >= 16% apart: ${JSON.stringify(ax.markers)}`
+      );
     }
   } else if (dSpan === 365) {
     assert.ok(ax.markers.some((m) => m.label === "Jan '27"));

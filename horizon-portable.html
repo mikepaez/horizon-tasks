@@ -2951,7 +2951,7 @@ function getTimelineAxis(today = new Date(), horizonDays = HORIZON_DAYS) {
         const pct = toPercent(d);
         majorOffsets.add(d);
         gridLines.push({ percent: pct, isMajor: true });
-        if (pct >= 10 && pct <= maxPct) {
+        if (canPlace(pct)) {
           const label =
             dt.getMonth() === 0
               ? `${SHORT_MONTHS[0]} ${dt.getFullYear()}`
