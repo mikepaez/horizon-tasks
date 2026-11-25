@@ -1,6 +1,7 @@
 # Personal task data — NEVER upload to GitHub
 tasks.json
 tasks.json.*
+tasks.v1-backup-*.json
 .tasks.json.*.tmp
 horizon-tasks-*.json
 

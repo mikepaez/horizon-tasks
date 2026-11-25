@@ -1,25 +1,33 @@
 /**
- * app.js — "The Front Counter"
- * Works in three storage modes automatically:
- * 1. Python local server (http://): saves directly to tasks.json via /api/tasks.
- * 2. Browser Direct File Access (Edge/Chrome, no Python): click "Open file" or "New file"
- *    to auto-save straight to a real tasks.json file on your PC or OneDrive (persisted in IndexedDB).
- * 3. Browser localStorage fallback: always keeps a backup copy even with zero setup.
+ * app.js — Horizon UI Controller & Storage Adapter
+ *
+ * Compact, single-pipeline architecture:
+ *   All task rules live in logic.js. Both server mode (Home PC Python server)
+ *   and portable mode (Work laptop single HTML + OneDrive file handle) execute
+ *   the exact same transitions and persist a schema-2 document envelope through
+ *   a single serialized syncQueue (preventing overlapping writes & stale races).
+ *
+ * Sections:
+ *   1. State, Helpers & Device Identity
+ *   2. IndexedDB File-Handle Persistence (file:// safe)
+ *   3. Serialized Sync & Storage Layer (Server ETag + Portable File + Backups)
+ *   4. Task Mutations, Today Cap (3), & Targeted Undo
+ *   5. Rendering (Header, Horizon Timeline, Today, Later + Waiting, Done)
+ *   6. Import / Export (Merge by Default)
+ *   7. Lifecycle, Midnight Refresh & Event Wiring
  */
 
-const STORAGE_KEY = "horizon_tasks_v1";
+const STORAGE_KEY = "horizon_tasks_v2";
+const LEGACY_STORAGE_KEY = "horizon_tasks_v1";
+const LEGACY_HORIZON_ZOOM_KEY = "horizon_zoom_days_v1";
+const BACKUP_KEY = "horizon_backups_v2";
+const PREFS_KEY = "horizon_ui_prefs_v1";
 const SAMPLE_FLAG_KEY = "horizon_samples_dismissed_v1";
-const HORIZON_ZOOM_KEY = "horizon_zoom_days_v1";
-const LAST_SYNC_MTIME_KEY = "horizon_last_sync_mtime_v1";
-const LOCAL_DIRTY_KEY = "horizon_local_dirty_v1";
-
-const IDB_NAME = "horizon_tasks_db";
+const DEVICE_ID_KEY = "horizon_device_id_v1";
+const IDB_NAME = "horizon_file_handles_v1";
 const IDB_STORE = "handles";
-const IDB_HANDLE_KEY = "linkedFile";
+const IDB_KEY = "linked_tasks_file";
 
-const MAX_UNDO_STEPS = 15;
-const MTIME_TOLERANCE_MS = 50;
-const UNDO_COALESCE_MS = 1500;
 const RECURRENCE_OPTIONS = [
   { value: "", label: "None" },
   { value: "weekly", label: "Weekly" },
@@ -28,114 +36,106 @@ const RECURRENCE_OPTIONS = [
   { value: "yearly", label: "Yearly" },
 ];
 
+// ============================================================================
+// 1. State, Helpers & Device Identity
+// ============================================================================
+
+function loadPrefs() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(PREFS_KEY) || "{}");
+    return raw && typeof raw === "object" ? raw : {};
+  } catch {
+    return {};
+  }
+}
+
+const uiPrefs = loadPrefs();
+function savePrefs(patch) {
+  Object.assign(uiPrefs, patch);
+  safeLocalSet(PREFS_KEY, JSON.stringify(uiPrefs));
+}
+
+function loadInitialHorizonDays() {
+  if (uiPrefs.horizonDays !== undefined && uiPrefs.horizonDays !== null) {
+    return parseHorizonDays(uiPrefs.horizonDays, HORIZON_DAYS);
+  }
+  try {
+    return parseHorizonDays(localStorage.getItem(LEGACY_HORIZON_ZOOM_KEY), HORIZON_DAYS);
+  } catch {
+    return HORIZON_DAYS;
+  }
+}
+
 let tasks = [];
-let inboxFilter = "all"; // "all" | "dated" | "flexible"
+let laterFilter = ["all", "dated", "flexible"].includes(uiPrefs.laterFilter) ? uiPrefs.laterFilter : "all";
+let waitingExpanded = Boolean(uiPrefs.waitingExpanded);
+let showAllDone = false;
+let showAllTimeline = false;
+let horizonDays = loadInitialHorizonDays();
+let captureArea = uiPrefs.captureArea === "personal" ? "personal" : "work";
 let searchQuery = "";
 let activeTag = null;
-let horizonDays = loadSavedHorizonDays();
+let checkinMode = "auto"; // "auto" | "cards" | "hidden"
+let checkinCards = [];
+let checkinIndex = 0;
+let inspectedTaskId = null;
 let expandedTaskId = null;
-let showAllTimeline = false;
-let showAllDone = false;
-let focusSubtaskInputTaskId = null;
-
-let useServerApi =
-  window.location.hostname === "127.0.0.1" ||
-  window.location.hostname === "localhost";
-
-let linkedFileHandle = null; // Active FileSystemFileHandle with readwrite permission
-let pendingReconnectHandle = null; // Saved handle waiting on 1-click user permission prompt
-let lastKnownFileMtime = null;
-let lastKnownServerMtime = null;
-let isWritingFile = false;
-let fileWritePromise = null;
-let fileWritePending = false;
-let fileWritePendingForce = false;
-
-let mutationQueue = Promise.resolve();
-let inFlightMutations = 0;
-let mutationEpoch = 0;
-
-let conflictState = null; // null | { mode: "file" | "server", filename?: string, retryAction?: Function }
-let pendingImport = null; // null | { tasks: Array, filename: string }
-
-const undoStack = []; // [{ tasks, label, key, ts }]
-let toastTimer = null;
+let editingNotesId = null;
+let editingTitleId = null;
+let editingStage = null; // { id, mode: "started"|"waiting", prompt?: string, draft?: string }
+let pendingFocusTarget = null; // { taskId, key } — focuses one exact control after render
+const notesDrafts = new Map(); // taskId -> unsaved note text (survives tab sync / redraws)
+const stepDrafts = new Map(); // taskId -> unsaved new-step text
+let pendingSwap = null; // { kind: "move", taskId } | { kind: "add", title, dueDate, area }
+let undoEntry = null; // { delta: Map<id, prevTask|null>, timerId }
 let lastRenderedDateKey = toDateKey(new Date());
-let isPointerDown = false;
 
-function enqueueMutation(fn) {
-  const run = async () => {
-    inFlightMutations += 1;
-    mutationEpoch += 1;
-    try {
-      return await fn();
-    } finally {
-      mutationEpoch += 1;
-      inFlightMutations -= 1;
+// Server mode state
+const useServerApi =
+  window.location.protocol.startsWith("http") &&
+  (window.location.hostname === "127.0.0.1" || window.location.hostname === "localhost");
+let hasLoadedServer = false;
+let serverEtag = null;
+let serverFileName = "tasks.json";
+const serverToken = document.querySelector('meta[name="horizon-token"]')?.getAttribute("content") || "";
+
+// Portable mode state
+let linkedFileHandle = null;
+let reconnectHandle = null;
+let lastDiskStamp = null;
+let lastSyncTime = "";
+let syncState = "local"; // "synced" | "local" | "error"
+let syncErrorMsg = "";
+let syncQueue = Promise.resolve();
+
+function getDeviceId() {
+  try {
+    let id = localStorage.getItem(DEVICE_ID_KEY);
+    if (!id) {
+      id = `dev-${Math.random().toString(36).slice(2, 8)}`;
+      localStorage.setItem(DEVICE_ID_KEY, id);
     }
-  };
-  const next = mutationQueue.then(run, run);
-  mutationQueue = next.catch(() => {});
-  return next;
-}
-
-function getSavedSyncMtime() {
-  try {
-    const raw = localStorage.getItem(LAST_SYNC_MTIME_KEY);
-    if (!raw) return null;
-    const num = Number(raw);
-    return Number.isFinite(num) && num > 0 ? num : null;
+    return id;
   } catch {
-    return null;
+    return "dev-session";
   }
 }
 
-function setSavedSyncMtime(mtime) {
-  try {
-    if (mtime !== null && mtime !== undefined && Number.isFinite(Number(mtime))) {
-      localStorage.setItem(LAST_SYNC_MTIME_KEY, String(Number(mtime)));
-    } else {
-      localStorage.removeItem(LAST_SYNC_MTIME_KEY);
-    }
-  } catch {
-    // ignore storage errors
-  }
-}
+const DEVICE_ID = getDeviceId();
+const activeTasks = () => tasks.filter((t) => !t.deleted);
+const nowHHMM = () => new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+const cloneTask = (t) => (t ? { ...t, subtasks: (t.subtasks || []).map((s) => ({ ...s })) } : null);
 
-function isLocalDirty() {
-  try {
-    return localStorage.getItem(LOCAL_DIRTY_KEY) === "1";
-  } catch {
-    return false;
-  }
-}
-
-function setLocalDirty(flag) {
-  try {
-    if (flag) localStorage.setItem(LOCAL_DIRTY_KEY, "1");
-    else localStorage.removeItem(LOCAL_DIRTY_KEY);
-  } catch {
-    // ignore storage errors
-  }
-}
-
-function handleServerNetworkError(err, actionName = "save changes") {
-  console.warn(`Server error while attempting to ${actionName}:`, err);
-  renderAll();
-  const isHttpErr = err && typeof err.message === "string" && err.message.startsWith("HTTP ");
-  const msg = isHttpErr
-    ? `Could not ${actionName} (${err.message})`
-    : "Could not reach Python server — is start.bat running?";
-  showToast(msg, { duration: 5000 });
-}
-
-function loadSavedHorizonDays() {
-  try {
-    return parseHorizonDays(localStorage.getItem(HORIZON_ZOOM_KEY), HORIZON_DAYS);
-  } catch {
-    // ignore storage access issues
-  }
-  return HORIZON_DAYS;
+function makeButton(label, className, onClick, attrs = {}) {
+  const b = document.createElement("button");
+  b.type = "button";
+  if (className) b.className = className;
+  b.textContent = label;
+  Object.entries(attrs).forEach(([k, v]) => {
+    if (v !== undefined && v !== null) b.setAttribute(k, String(v));
+  });
+  b.addEventListener("click", onClick);
+  return b;
 }
 
 function setHorizonDays(rawValue) {
@@ -147,11 +147,7 @@ function setHorizonDays(rawValue) {
     inputEl.value = String(horizonDays);
   }
   if (changed) {
-    try {
-      localStorage.setItem(HORIZON_ZOOM_KEY, String(horizonDays));
-    } catch {
-      // ignore storage errors
-    }
+    savePrefs({ horizonDays });
     renderTimeline();
     renderLists();
   }
@@ -173,183 +169,52 @@ function isHorizonMenuOpen() {
   return Boolean(menu && !menu.classList.contains("hidden"));
 }
 
-function extractSafeUrls(notesText) {
-  if (!notesText || typeof notesText !== "string") return [];
-  const matches = notesText.match(/https?:\/\/[^\s<>"')]+/gi) || [];
-  const seen = new Set();
-  const urls = [];
-  matches.forEach((raw) => {
-    const cleaned = raw.replace(/[.,;:!?]+$/, "");
-    try {
-      const u = new URL(cleaned);
-      if ((u.protocol === "http:" || u.protocol === "https:") && !seen.has(u.href)) {
-        seen.add(u.href);
-        urls.push({ href: u.href, label: cleaned });
-      }
-    } catch {
-      // ignore malformed URLs
-    }
-  });
-  return urls;
+function enqueueSync(fn) {
+  syncQueue = syncQueue.then(fn, fn);
+  return syncQueue;
 }
 
-function cloneTasks(list) {
-  return JSON.parse(JSON.stringify(list));
-}
+// ============================================================================
+// 2. IndexedDB File-Handle Persistence (graceful fallback on file://)
+// ============================================================================
 
-function scheduleBlurCommit(commitFn) {
-  if (!isPointerDown) {
-    commitFn();
-    return;
-  }
-  let ran = false;
-  const runOnce = () => {
-    if (ran) return;
-    ran = true;
-    window.removeEventListener("click", runOnce, true);
-    setTimeout(commitFn, 0);
-  };
-  window.addEventListener("click", runOnce, true);
-  setTimeout(runOnce, 240);
-}
-
-// --- Sample Tasks (for first-time offline / portable launch) ---
-
-function addDaysKey(daysFromToday) {
-  return addDaysToKey(toDateKey(new Date()), daysFromToday);
-}
-
-function createSampleTasks() {
-  const now = Date.now();
-  return normalizeTaskList([
-    {
-      id: "sample-1",
-      title: "Pay electricity bill #home",
-      dueDate: addDaysKey(2),
-      status: "today",
-      previousStatus: "today",
-      notes: "Autopay is off. Account number is on the paper statement.",
-      subtasks: [],
-      recurrence: "monthly",
-      recurrenceSpawnedId: null,
-      createdAt: now - 4000,
-      updatedAt: now - 4000,
-      completedAt: null,
-      isSample: true,
-    },
-    {
-      id: "sample-2",
-      title: "Book dentist checkup #health",
-      dueDate: addDaysKey(11),
-      status: "inbox",
-      previousStatus: "inbox",
-      notes: "Ask about the cleaning slot after 3pm. Bring insurance card.",
-      subtasks: [
-        { id: "st-sample-2a", text: "Check insurance coverage", done: true },
-        { id: "st-sample-2b", text: "Call the clinic", done: false },
-        { id: "st-sample-2c", text: "Add appointment to calendar", done: false },
-      ],
-      recurrence: "quarterly",
-      recurrenceSpawnedId: null,
-      createdAt: now - 3000,
-      updatedAt: now - 3000,
-      completedAt: null,
-      isSample: true,
-    },
-    {
-      id: "sample-3",
-      title: "Renew car insurance #home",
-      dueDate: addDaysKey(34),
-      status: "inbox",
-      previousStatus: "inbox",
-      notes: "Compare at least two quotes before renewing.",
-      subtasks: [
-        { id: "st-sample-3a", text: "Get two competing quotes", done: false },
-        { id: "st-sample-3b", text: "Renew online", done: false },
-      ],
-      recurrence: "yearly",
-      recurrenceSpawnedId: null,
-      createdAt: now - 2000,
-      updatedAt: now - 2000,
-      completedAt: null,
-      isSample: true,
-    },
-    {
-      id: "sample-4",
-      title: "Plan spring trip & flights",
-      dueDate: addDaysKey(74),
-      status: "inbox",
-      previousStatus: "inbox",
-      notes: "",
-      subtasks: [],
-      recurrence: "",
-      recurrenceSpawnedId: null,
-      createdAt: now - 1000,
-      updatedAt: now - 1000,
-      completedAt: null,
-      isSample: true,
-    },
-    {
-      id: "sample-5",
-      title: "Clean up Downloads folder",
-      dueDate: "",
-      status: "inbox",
-      previousStatus: "inbox",
-      notes: "",
-      subtasks: [],
-      recurrence: "",
-      recurrenceSpawnedId: null,
-      createdAt: now - 500,
-      updatedAt: now - 500,
-      completedAt: null,
-      isSample: true,
-    },
-  ]);
-}
-
-// --- IndexedDB Handle Persistence ---
-
-function openHandlesDb() {
+function openHandleDb() {
   return new Promise((resolve, reject) => {
-    if (typeof indexedDB === "undefined") {
-      reject(new Error("IndexedDB unavailable"));
-      return;
+    if (!window.indexedDB) return reject(new Error("IndexedDB unavailable"));
+    try {
+      const req = indexedDB.open(IDB_NAME, 1);
+      req.onupgradeneeded = () => req.result.createObjectStore(IDB_STORE);
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    } catch (err) {
+      reject(err);
     }
-    const req = indexedDB.open(IDB_NAME, 1);
-    req.onupgradeneeded = () => {
-      const db = req.result;
-      if (!db.objectStoreNames.contains(IDB_STORE)) {
-        db.createObjectStore(IDB_STORE);
-      }
-    };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
   });
 }
 
-async function saveHandleToIdb(handle) {
+async function saveStoredHandle(handle) {
   try {
-    const db = await openHandlesDb();
+    const db = await openHandleDb();
     await new Promise((resolve, reject) => {
       const tx = db.transaction(IDB_STORE, "readwrite");
-      tx.objectStore(IDB_STORE).put(handle, IDB_HANDLE_KEY);
-      tx.oncomplete = () => resolve();
+      tx.objectStore(IDB_STORE).put(handle, IDB_KEY);
+      tx.oncomplete = resolve;
       tx.onerror = () => reject(tx.error);
     });
     db.close();
-  } catch (err) {
-    console.warn("Could not persist file handle in IndexedDB:", err);
+  } catch {
+    // Opaque file:// origins or enterprise policies may block IndexedDB; safe to skip
   }
 }
 
-async function loadHandleFromIdb() {
+async function loadStoredHandle() {
   try {
-    const db = await openHandlesDb();
+    const db = await openHandleDb();
     const handle = await new Promise((resolve, reject) => {
       const tx = db.transaction(IDB_STORE, "readonly");
-      const getReq = tx.objectStore(IDB_STORE).get(IDB_HANDLE_KEY);
-      getReq.onsuccess = () => resolve(getReq.result || null);
-      getReq.onerror = () => reject(getReq.error);
+      const req = tx.objectStore(IDB_STORE).get(IDB_KEY);
+      req.onsuccess = () => resolve(req.result || null);
+      req.onerror = () => reject(req.error);
     });
     db.close();
     return handle;
@@ -358,264 +223,9 @@ async function loadHandleFromIdb() {
   }
 }
 
-// --- Toast & Undo Stack ---
-
-function pushUndoSnapshot(snapshotTasks, label, coalesceKey = null) {
-  const now = Date.now();
-  const top = undoStack[undoStack.length - 1];
-  if (coalesceKey && top && top.key === coalesceKey && now - top.ts < UNDO_COALESCE_MS) {
-    top.label = label;
-    top.ts = now;
-    return;
-  }
-  undoStack.push({ tasks: snapshotTasks, label, key: coalesceKey, ts: now });
-  if (undoStack.length > MAX_UNDO_STEPS) {
-    undoStack.shift();
-  }
-}
-
-function hideToast() {
-  if (toastTimer) {
-    clearTimeout(toastTimer);
-    toastTimer = null;
-  }
-  document.getElementById("undo-toast").classList.add("hidden");
-}
-
-function showToast(message, { showUndo = false, duration = 6000 } = {}) {
-  const toastEl = document.getElementById("undo-toast");
-  const msgEl = document.getElementById("toast-msg");
-  const undoBtn = document.getElementById("toast-undo-btn");
-
-  msgEl.textContent = message;
-  undoBtn.classList.toggle("hidden", !(showUndo && undoStack.length > 0));
-  toastEl.classList.remove("hidden");
-
-  if (toastTimer) clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => {
-    toastEl.classList.add("hidden");
-    toastTimer = null;
-  }, duration);
-}
-
-async function serverMutate(url, { method = "POST", body = null, force = false, actionName = "save changes" } = {}) {
-  let reqUrl = url;
-  const fetchOptions = { method };
-
-  if (method === "DELETE") {
-    const params = new URLSearchParams();
-    if (lastKnownServerMtime !== null && !force) {
-      params.set("expectedMtimeMs", String(lastKnownServerMtime));
-    }
-    if (force) params.set("force", "true");
-    const qs = params.toString();
-    if (qs) reqUrl = `${url}${url.includes("?") ? "&" : "?"}${qs}`;
-  } else {
-    const payload = body && typeof body === "object" ? { ...body } : {};
-    if (lastKnownServerMtime !== null && !force) {
-      payload.expectedMtimeMs = lastKnownServerMtime;
-    }
-    if (force) payload.force = true;
-    fetchOptions.body = JSON.stringify(payload);
-  }
-
-  try {
-    const data = await apiRequest(reqUrl, fetchOptions);
-    if (Array.isArray(data.tasks)) {
-      tasks = normalizeTaskList(data.tasks);
-    }
-    if (data.mtimeMs !== undefined) {
-      lastKnownServerMtime = data.mtimeMs;
-    }
-    saveLocalBackup();
-    hideConflictBanner();
-    return { ok: true, data };
-  } catch (err) {
-    if (err && err.status === 409) {
-      return { ok: false, conflict: true, status: 409, error: err };
-    }
-    handleServerNetworkError(err, actionName);
-    return { ok: false, conflict: false, status: (err && err.status) || 0, error: err };
-  }
-}
-
-async function performUndo({ force = false } = {}) {
-  return enqueueMutation(async () => {
-    if (undoStack.length === 0) return { ok: false };
-    const entry = undoStack.pop();
-    const restored = normalizeTaskList(entry.tasks);
-
-    if (useServerApi) {
-      const res = await serverMutate("/api/tasks/restore", {
-        method: "POST",
-        body: { tasks: restored },
-        force,
-        actionName: "undo",
-      });
-      if (!res.ok) {
-        undoStack.push(entry);
-        if (res.conflict) {
-          showConflictBanner("server", "tasks.json", () => performUndo({ force: true }));
-        }
-        return res;
-      }
-    } else {
-      tasks = restored;
-      const persisted = await persistOffline();
-      if (persisted) {
-        hideConflictBanner();
-      }
-    }
-    renderAll();
-    showToast(`Undid: ${entry.label}`, {
-      showUndo: undoStack.length > 0,
-      duration: 3500,
-    });
-    return { ok: true };
-  });
-}
-
-// --- External Sync Conflict Banner ---
-
-function showConflictBanner(mode, filename = "tasks.json", retryAction = null) {
-  conflictState = { mode, filename, retryAction };
-  const banner = document.getElementById("conflict-banner");
-  const textEl = document.getElementById("conflict-banner-text");
-  const overwriteBtn = document.getElementById("conflict-overwrite-btn");
-
-  textEl.textContent = `${filename || "tasks.json"} changed outside this tab`;
-  overwriteBtn.textContent =
-    mode === "server" ? "Overwrite with mine" : "Keep my version & overwrite";
-  banner.classList.remove("hidden");
-}
-
-function hideConflictBanner() {
-  conflictState = null;
-  document.getElementById("conflict-banner").classList.add("hidden");
-}
-
-async function reloadFromExternalSource() {
-  if (useServerApi) {
-    try {
-      const data = await apiRequest("/api/tasks");
-      tasks = normalizeTaskList(data.tasks);
-      if (data.mtimeMs !== undefined) lastKnownServerMtime = data.mtimeMs;
-      saveLocalBackup();
-      hideConflictBanner();
-      renderAll();
-      showToast("Reloaded latest tasks from disk", { duration: 3000 });
-    } catch (err) {
-      handleServerNetworkError(err, "reload tasks");
-    }
-    return;
-  }
-
-  if (linkedFileHandle) {
-    try {
-      const file = await linkedFileHandle.getFile();
-      const text = await file.text();
-      const parsed = text.trim() ? JSON.parse(text) : [];
-      if (!Array.isArray(parsed)) {
-        alert("The external file is no longer a valid JSON task list.");
-        return;
-      }
-      tasks = normalizeTaskList(parsed);
-      lastKnownFileMtime = file.lastModified;
-      setSavedSyncMtime(file.lastModified);
-      setLocalDirty(false);
-      saveLocalBackup();
-      hideConflictBanner();
-      renderAll();
-      showToast(`Reloaded ${linkedFileHandle.name}`, { duration: 3000 });
-    } catch (err) {
-      console.warn("Could not reload linked file:", err);
-      showToast(`Could not reload ${linkedFileHandle.name}`, { duration: 4000 });
-    }
-  }
-}
-
-async function overwriteExternalWithMine() {
-  const pendingRetry = conflictState && conflictState.retryAction;
-  if (useServerApi) {
-    if (pendingRetry) {
-      const res = await pendingRetry();
-      if (res === true || (res && res.ok)) {
-        hideConflictBanner();
-        showToast("Saved your changes to disk", { duration: 3000 });
-        return;
-      }
-      // Only fall through to full restore when the target task vanished externally (404).
-      // For network / 5xx errors, pendingRetry already displayed an error toast.
-      if (!res || res.status !== 404) {
-        return;
-      }
-    }
-    const res = await enqueueMutation(() =>
-      serverMutate("/api/tasks/restore", {
-        method: "POST",
-        body: { tasks },
-        force: true,
-        actionName: "overwrite server tasks",
-      })
-    );
-    if (res.ok) {
-      renderAll();
-      showToast("Overwrote tasks.json with your version", { duration: 3000 });
-    }
-    return;
-  }
-
-  if (linkedFileHandle) {
-    const ok = await writeLinkedFile({ force: true });
-    if (ok) {
-      hideConflictBanner();
-      renderAll();
-      showToast(`Overwrote ${linkedFileHandle.name} with your version`, { duration: 3000 });
-    }
-  }
-}
-
-async function checkExternalSyncDrift() {
-  if (inFlightMutations > 0) return;
-
-  if (useServerApi) {
-    if (lastKnownServerMtime === null) return;
-    const epochBefore = mutationEpoch;
-    try {
-      const data = await apiRequest("/api/tasks");
-      if (
-        inFlightMutations === 0 &&
-        mutationEpoch === epochBefore &&
-        data.mtimeMs !== undefined &&
-        data.mtimeMs !== null &&
-        Math.abs(data.mtimeMs - lastKnownServerMtime) > MTIME_TOLERANCE_MS
-      ) {
-        showConflictBanner("server", "tasks.json");
-      }
-    } catch {
-      // ignore transient focus check failures
-    }
-    return;
-  }
-
-  if (linkedFileHandle && !isWritingFile && lastKnownFileMtime !== null) {
-    const epochBefore = mutationEpoch;
-    try {
-      const currentFile = await linkedFileHandle.getFile();
-      if (
-        !isWritingFile &&
-        mutationEpoch === epochBefore &&
-        currentFile.lastModified !== lastKnownFileMtime
-      ) {
-        showConflictBanner("file", linkedFileHandle.name);
-      }
-    } catch {
-      // ignore transient file handle access errors
-    }
-  }
-}
-
-// --- API / Direct File / Browser Storage Layer ---
+// ============================================================================
+// 3. Serialized Sync & Storage Layer
+// ============================================================================
 
 function supportsDirectFileAccess() {
   return (
@@ -624,609 +234,637 @@ function supportsDirectFileAccess() {
   );
 }
 
+function safeLocalSet(key, value) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // Storage quota or opaque file:// restriction
+  }
+}
+
+function saveLocalCache(doc) {
+  safeLocalSet(STORAGE_KEY, JSON.stringify(doc));
+  try {
+    const existing = JSON.parse(localStorage.getItem(BACKUP_KEY) || "[]");
+    const list = Array.isArray(existing) ? existing : [];
+    list.unshift({ savedAt: doc.savedAt, doc });
+    localStorage.setItem(BACKUP_KEY, JSON.stringify(list.slice(0, 3)));
+  } catch {
+    // Best-effort rolling local backup
+  }
+}
+
 function updateStorageIndicator() {
-  const tag = document.getElementById("storage-tag");
+  const pill = document.getElementById("storage-tag");
+  const reconnectBtn = document.getElementById("reconnect-file-btn");
   const openBtn = document.getElementById("link-file-btn");
   const newBtn = document.getElementById("new-file-btn");
-  const reconnectBtn = document.getElementById("reconnect-file-btn");
+
+  pill.classList.remove("is-synced", "is-local", "is-error");
 
   if (useServerApi) {
-    tag.textContent = "tasks.json (Python)";
-    tag.classList.add("is-linked");
+    reconnectBtn.classList.add("hidden");
     openBtn.classList.add("hidden");
     newBtn.classList.add("hidden");
-    reconnectBtn.classList.add("hidden");
+    if (syncState === "error") {
+      pill.textContent = "▲ Server error · Retry";
+      pill.title = syncErrorMsg || "Could not reach local Python server.";
+      pill.classList.add("is-error");
+    } else {
+      pill.textContent = `● Synced · ${serverFileName}${lastSyncTime ? ` · ${lastSyncTime}` : ""}`;
+      pill.title = "Auto-saving directly via local Python server.";
+      pill.classList.add("is-synced");
+    }
     return;
   }
 
   const canLink = supportsDirectFileAccess();
   openBtn.classList.toggle("hidden", !canLink);
   newBtn.classList.toggle("hidden", !canLink);
+  reconnectBtn.classList.toggle("hidden", !reconnectHandle || Boolean(linkedFileHandle));
+  if (reconnectHandle && !linkedFileHandle) {
+    reconnectBtn.textContent = `Reconnect ${reconnectHandle.name}`;
+  }
 
-  if (linkedFileHandle) {
-    tag.textContent = `${linkedFileHandle.name} (auto-saving)`;
-    tag.title = "Every change automatically saves directly to this file on your PC.";
-    tag.classList.add("is-linked");
-    reconnectBtn.classList.add("hidden");
-  } else if (pendingReconnectHandle) {
-    tag.textContent = "browser storage";
-    tag.title = "Click Reconnect to resume saving directly to your linked JSON file.";
-    tag.classList.remove("is-linked");
-    reconnectBtn.textContent = `Reconnect ${pendingReconnectHandle.name}`;
-    reconnectBtn.classList.remove("hidden");
+  if (syncState === "error") {
+    pill.textContent = `▲ Couldn't save${linkedFileHandle ? ` ${linkedFileHandle.name}` : ""} · Retry`;
+    pill.title = syncErrorMsg || "Click to retry saving or export a backup.";
+    pill.classList.add("is-error");
+  } else if (linkedFileHandle) {
+    pill.textContent = `● Synced · ${linkedFileHandle.name}${lastSyncTime ? ` · ${lastSyncTime}` : ""}`;
+    pill.title = "Auto-saving directly to your linked file (with conflict merge).";
+    pill.classList.add("is-synced");
   } else {
-    tag.textContent = "browser storage";
-    tag.title = canLink
-      ? "Click Open file or New file to auto-save directly to a real tasks.json file."
-      : "Saved in browser storage. Use Export / Import to move tasks.json.";
-    tag.classList.remove("is-linked");
-    reconnectBtn.classList.add("hidden");
+    pill.textContent = "● This PC only · Export";
+    pill.title = canLink
+      ? "Saved in browser only. Click Open file / New file to sync with OneDrive, or Export."
+      : "Saved in browser only. Use Export / Import to move tasks.json between PCs.";
+    pill.classList.add("is-local");
   }
 }
 
-async function apiRequest(url, options = {}) {
-  const res = await fetch(url, {
-    headers: { "Content-Type": "application/json" },
-    ...options,
-  });
-  if (res.status === 409) {
-    let payload = {};
-    try {
-      payload = await res.json();
-    } catch {
-      // ignore
-    }
-    const err = new Error("Conflict");
-    err.status = 409;
-    err.conflictData = payload;
-    throw err;
-  }
-  if (!res.ok) {
-    const err = new Error(`HTTP ${res.status}`);
-    err.status = res.status;
-    throw err;
-  }
-  return res.json();
+function showBanner(text, actions = [], isError = false) {
+  const banner = document.getElementById("system-banner");
+  const textEl = document.getElementById("system-banner-text");
+  const actionsEl = document.getElementById("system-banner-actions");
+  textEl.textContent = text;
+  actionsEl.innerHTML = "";
+  actions.forEach(({ label, onClick }) => actionsEl.appendChild(makeButton(label, "banner-btn", onClick)));
+  banner.classList.toggle("is-error", isError);
+  banner.classList.remove("hidden");
+  // At most one system banner visible at a time
+  document.getElementById("checkin-banner").classList.add("hidden");
 }
 
-function saveLocalBackup() {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks));
-  } catch (err) {
-    console.warn("Could not save to localStorage:", err);
-  }
+function hideBanner() {
+  document.getElementById("system-banner").classList.add("hidden");
+  renderCheckin();
 }
 
-async function writeLinkedFileOnce({ force = false } = {}) {
-  if (!linkedFileHandle) return false;
-  try {
-    if (!force && lastKnownFileMtime !== null) {
-      const checkFile = await linkedFileHandle.getFile();
-      if (checkFile.lastModified !== lastKnownFileMtime) {
-        showConflictBanner("file", linkedFileHandle.name);
-        return false;
-      }
-    }
-    isWritingFile = true;
-    const writable = await linkedFileHandle.createWritable();
-    await writable.write(JSON.stringify(tasks, null, 2) + "\n");
-    await writable.close();
-    const updatedFile = await linkedFileHandle.getFile();
-    lastKnownFileMtime = updatedFile.lastModified;
-    setSavedSyncMtime(lastKnownFileMtime);
-    setLocalDirty(false);
-    isWritingFile = false;
-    return true;
-  } catch (err) {
-    isWritingFile = false;
-    console.warn("Could not write linked tasks.json file:", err);
-    showToast(`Could not save to ${linkedFileHandle.name} — backup kept in browser`, {
-      duration: 5000,
-    });
-    return false;
-  }
-}
-
-async function writeLinkedFile({ force = false } = {}) {
-  if (!linkedFileHandle) return false;
-  if (fileWritePromise) {
-    fileWritePending = true;
-    fileWritePendingForce = fileWritePendingForce || force;
-    return fileWritePromise;
-  }
-  const run = async (runForce) => {
-    let ok = await writeLinkedFileOnce({ force: runForce });
-    while (fileWritePending) {
-      const nextForce = fileWritePendingForce;
-      fileWritePending = false;
-      fileWritePendingForce = false;
-      ok = await writeLinkedFileOnce({ force: nextForce });
-    }
-    return ok;
-  };
-  fileWritePromise = run(force).finally(() => {
-    fileWritePromise = null;
-  });
-  return fileWritePromise;
-}
-
-async function persistOffline() {
-  saveLocalBackup();
-  // Always mark dirty BEFORE writing so a failed write or conflict never loses browser edits on reload
-  setLocalDirty(true);
-  if (!linkedFileHandle) {
-    return true;
-  }
-  return writeLinkedFile();
-}
-
-async function loadFromFileHandle(handle) {
-  const file = await handle.getFile();
-  const text = await file.text();
-  const parsed = text.trim() ? JSON.parse(text) : [];
-  if (!Array.isArray(parsed)) {
-    throw new Error("Invalid tasks JSON list");
-  }
-  linkedFileHandle = handle;
-  pendingReconnectHandle = null;
-  lastKnownFileMtime = file.lastModified;
-  setSavedSyncMtime(file.lastModified);
-  setLocalDirty(false);
-  tasks = normalizeTaskList(parsed);
-  localStorage.setItem(SAMPLE_FLAG_KEY, "1");
-  saveLocalBackup();
-  hideConflictBanner();
+function reportSyncError(targetName, message, retryFn) {
+  syncState = "error";
+  syncErrorMsg = message;
   updateStorageIndicator();
+  showBanner(
+    `Couldn't save to ${targetName}: ${message}`,
+    [
+      { label: "Retry", onClick: retryFn },
+      { label: "Export backup", onClick: exportJson },
+    ],
+    true
+  );
 }
 
-async function linkExistingFile() {
-  if (!supportsDirectFileAccess()) return;
-  try {
-    const [handle] = await window.showOpenFilePicker({
-      types: [{ description: "JSON Tasks File", accept: { "application/json": [".json"] } }],
-      multiple: false,
+async function serverFetch(url, options = {}) {
+  const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
+  if (serverToken) headers["X-Horizon-Token"] = serverToken;
+  return fetch(url, { ...options, headers });
+}
+
+function loadFromServer({ merge = false } = {}) {
+  return enqueueSync(async () => {
+    try {
+      const res = await serverFetch("/api/data", { method: "GET" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+
+      const parsed = parseTaskDocument(data.document || []);
+      const prevEtag = serverEtag;
+      serverEtag = res.headers.get("ETag");
+      serverFileName = data.fileName || "tasks.json";
+
+      if (data.isNew && !hasLoadedServer && !merge) {
+        // Brand-new server file: seed starter samples once via logic.js
+        tasks = createSampleTasks();
+        hasLoadedServer = true;
+        await saveToServerInner();
+      } else if (merge && hasLoadedServer) {
+        if (prevEtag && serverEtag === prevEtag) return false;
+        tasks = mergeTaskLists(tasks, parsed.tasks);
+        renderAll();
+        showToast(`Synced latest changes from ${serverFileName}`);
+      } else {
+        tasks = parsed.tasks;
+        hasLoadedServer = true;
+      }
+
+      syncState = "synced";
+      syncErrorMsg = "";
+      lastSyncTime = nowHHMM();
+      hideBanner();
+      updateStorageIndicator();
+      return true;
+    } catch (err) {
+      syncState = "error";
+      syncErrorMsg = String(err.message || err);
+      updateStorageIndicator();
+      showBanner(
+        `Local server issue: ${syncErrorMsg}. Edits won't save to disk until reconnected.`,
+        [{ label: "Retry", onClick: async () => { if (await loadFromServer({ merge: hasLoadedServer })) renderAll(); } }],
+        true
+      );
+      return false;
+    }
+  });
+}
+
+async function saveToServerInner() {
+  // Never overwrite disk before at least one server read has succeeded
+  if (!hasLoadedServer || !serverEtag) {
+    reportSyncError(serverFileName, "Server has not loaded yet — click Retry to reconnect first.", async () => {
+      if (await loadFromServer({ merge: hasLoadedServer })) renderAll();
     });
-    const preSnapshot = tasks.some((t) => !t.isSample) ? cloneTasks(tasks) : null;
-    await loadFromFileHandle(handle);
-    await saveHandleToIdb(handle);
-    if (preSnapshot) {
-      pushUndoSnapshot(preSnapshot, `Opened "${handle.name}"`);
-    }
-    renderAll();
-    if (preSnapshot) {
-      showToast(`Opened ${handle.name}`, { showUndo: true, duration: 5000 });
-    }
-  } catch (err) {
-    if (err && err.message === "Invalid tasks JSON list") {
-      alert("That file doesn't look like a Horizon tasks.json list.");
-    } else if (err && err.name !== "AbortError") {
-      alert("Direct file linking isn't allowed here — use Export / Import instead. Your tasks are still saved in the browser.");
-    }
+    return;
   }
-}
 
-async function createLinkedFile() {
-  if (!supportsDirectFileAccess()) return;
+  const doc = serializeTaskDocument(tasks, DEVICE_ID);
+  saveLocalCache(doc);
+
   try {
-    const handle = await window.showSaveFilePicker({
-      suggestedName: "tasks.json",
-      types: [{ description: "JSON Tasks File", accept: { "application/json": [".json"] } }],
+    const res = await serverFetch("/api/data", {
+      method: "PUT",
+      headers: { "If-Match": serverEtag },
+      body: JSON.stringify(doc),
     });
-    linkedFileHandle = handle;
-    pendingReconnectHandle = null;
-    lastKnownFileMtime = null;
-    await saveHandleToIdb(handle);
-    await writeLinkedFile({ force: true });
-    saveLocalBackup();
-    hideConflictBanner();
+
+    if (res.status === 409) {
+      const conflictData = await res.json();
+      const remoteDoc = parseTaskDocument(conflictData.document);
+      tasks = mergeTaskLists(tasks, remoteDoc.tasks);
+      serverEtag = res.headers.get("ETag");
+      const mergedDoc = serializeTaskDocument(tasks, DEVICE_ID);
+      saveLocalCache(mergedDoc);
+
+      const retry = await serverFetch("/api/data", {
+        method: "PUT",
+        headers: { "If-Match": serverEtag },
+        body: JSON.stringify(mergedDoc),
+      });
+      if (!retry.ok) {
+        const retryErr = await retry.json().catch(() => ({}));
+        throw new Error(retryErr.error || `HTTP ${retry.status}`);
+      }
+      serverEtag = retry.headers.get("ETag");
+      showToast(`Merged updates from ${serverFileName}`);
+      renderAll();
+    } else if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.error || `HTTP ${res.status}`);
+    } else {
+      serverEtag = res.headers.get("ETag");
+    }
+
+    syncState = "synced";
+    syncErrorMsg = "";
+    lastSyncTime = nowHHMM();
+    hideBanner();
     updateStorageIndicator();
   } catch (err) {
-    if (err && err.name !== "AbortError") {
-      alert("Direct file linking isn't allowed here — use Export / Import instead. Your tasks are still saved in the browser.");
+    reportSyncError(serverFileName, String(err.message || err), () => persistState());
+  }
+}
+
+async function readFileWithRetry(handle) {
+  try {
+    return await handle.getFile();
+  } catch {
+    // OneDrive Files On-Demand can transiently fail on first touch — retry once
+    await new Promise((r) => setTimeout(r, 350));
+    return handle.getFile();
+  }
+}
+
+function writeLinkedFileQueued() {
+  if (!linkedFileHandle) return Promise.resolve();
+  return enqueueSync(async () => {
+    try {
+      let mergedRemote = false;
+      const file = await readFileWithRetry(linkedFileHandle);
+      const text = await file.text();
+      if (lastDiskStamp && file.lastModified !== lastDiskStamp && text.trim()) {
+        const remote = parseTaskDocument(JSON.parse(text));
+        tasks = mergeTaskLists(tasks, remote.tasks);
+        mergedRemote = true;
+        showToast(`Merged updates from ${linkedFileHandle.name}`);
+      }
+
+      const doc = serializeTaskDocument(tasks, DEVICE_ID);
+      saveLocalCache(doc);
+      const writable = await linkedFileHandle.createWritable();
+      await writable.write(JSON.stringify(doc, null, 2) + "\n");
+      await writable.close();
+
+      const updatedFile = await linkedFileHandle.getFile();
+      lastDiskStamp = updatedFile.lastModified;
+      syncState = "synced";
+      syncErrorMsg = "";
+      lastSyncTime = nowHHMM();
+      hideBanner();
+      updateStorageIndicator();
+      if (mergedRemote) renderAll();
+    } catch (err) {
+      reportSyncError(linkedFileHandle.name, String(err.message || err), () => writeLinkedFileQueued());
     }
+  });
+}
+
+function persistState() {
+  if (useServerApi) {
+    return enqueueSync(() => saveToServerInner());
+  }
+
+  const doc = serializeTaskDocument(tasks, DEVICE_ID);
+  saveLocalCache(doc);
+  if (linkedFileHandle) return writeLinkedFileQueued();
+  if (activeTasks().some((t) => !t.isSample)) {
+    savePrefs({ lastLocalEditAt: Date.now() });
+  }
+  syncState = "local";
+  updateStorageIndicator();
+  return Promise.resolve();
+}
+
+function syncFromExternalChange() {
+  if (useServerApi) {
+    return loadFromServer({ merge: true });
+  }
+  if (!linkedFileHandle) return Promise.resolve();
+  return enqueueSync(async () => {
+    try {
+      const file = await readFileWithRetry(linkedFileHandle);
+      if (lastDiskStamp && file.lastModified === lastDiskStamp) return;
+      const text = await file.text();
+      if (!text.trim()) return;
+      const remote = parseTaskDocument(JSON.parse(text));
+      tasks = mergeTaskLists(tasks, remote.tasks);
+      lastDiskStamp = file.lastModified;
+      saveLocalCache(serializeTaskDocument(tasks, DEVICE_ID));
+      lastSyncTime = nowHHMM();
+      updateStorageIndicator();
+      renderAll();
+      showToast(`Synced latest changes from ${linkedFileHandle.name}`);
+    } catch {
+      // Non-fatal on focus refresh; next write surfaces any persistent lock
+    }
+  });
+}
+
+async function attachFileHandle(handle) {
+  const file = await readFileWithRetry(handle);
+  const text = await file.text();
+  let merged = false;
+
+  if (text.trim()) {
+    const parsed = parseTaskDocument(JSON.parse(text));
+    if (parsed.wasV1) {
+      safeLocalSet(`horizon_v1_backup_${toDateKey(new Date())}`, text);
+    }
+    // Keep local tombstones when merging so deletions made while unlinked propagate!
+    const localReal = tasks.filter((t) => !t.isSample);
+    if (localReal.length > 0) {
+      tasks = mergeTaskLists(localReal, parsed.tasks);
+      merged = true;
+    } else {
+      tasks = parsed.tasks;
+    }
+  }
+
+  linkedFileHandle = handle;
+  reconnectHandle = null;
+  lastDiskStamp = file.lastModified;
+  safeLocalSet(SAMPLE_FLAG_KEY, "1");
+  await saveStoredHandle(handle);
+  await persistState();
+  renderAll();
+  showToast(merged ? `Linked & merged with ${handle.name}` : `Linked to ${handle.name}`);
+}
+
+async function pickAndLinkFile(mode) {
+  if (!supportsDirectFileAccess()) return;
+  let handle;
+  try {
+    if (mode === "open") {
+      [handle] = await window.showOpenFilePicker({
+        types: [{ description: "JSON Tasks File", accept: { "application/json": [".json"] } }],
+        multiple: false,
+      });
+    } else {
+      handle = await window.showSaveFilePicker({
+        suggestedName: "tasks.json",
+        types: [{ description: "JSON Tasks File", accept: { "application/json": [".json"] } }],
+      });
+    }
+  } catch (err) {
+    if (err && err.name !== "AbortError") {
+      showBanner(
+        "Direct file linking isn't allowed here — use Export / Import instead. Your tasks stay saved in browser storage.",
+        [{ label: "Dismiss", onClick: hideBanner }]
+      );
+    }
+    return;
+  }
+
+  try {
+    await attachFileHandle(handle);
+  } catch (err) {
+    showBanner(
+      `Couldn't read ${handle.name}: ${err.message || err}. Make sure it's valid Horizon JSON.`,
+      [{ label: "Dismiss", onClick: hideBanner }],
+      true
+    );
   }
 }
 
 async function reconnectSavedFile() {
-  if (!pendingReconnectHandle) return;
-  const handle = pendingReconnectHandle;
-  const fileName = handle.name || "tasks.json";
+  if (!reconnectHandle) return;
   try {
-    const perm = await handle.requestPermission({ mode: "readwrite" });
-    if (perm !== "granted") {
-      showToast(`Permission not granted for ${fileName}`, { duration: 4000 });
-      return;
+    const perm = await reconnectHandle.requestPermission({ mode: "readwrite" });
+    if (perm === "granted") {
+      await attachFileHandle(reconnectHandle);
+    } else {
+      showBanner("Permission not granted to reconnect file.", [{ label: "Dismiss", onClick: hideBanner }]);
     }
-
-    const diskFile = await handle.getFile();
-    const savedMtime = getSavedSyncMtime();
-    const dirty = isLocalDirty();
-
-    if (dirty && savedMtime !== null && diskFile.lastModified === savedMtime) {
-      // Only browser edits happened while disconnected: resume auto-save and push them to disk
-      linkedFileHandle = handle;
-      pendingReconnectHandle = null;
-      lastKnownFileMtime = diskFile.lastModified;
-      const ok = await writeLinkedFile({ force: true });
-      updateStorageIndicator();
-      renderAll();
-      if (ok) {
-        showToast(`Reconnected & saved local edits to ${fileName}`, { duration: 4000 });
-      }
-      return;
-    }
-
-    if (dirty) {
-      // Both browser and disk may have diverged: keep user's session intact and offer conflict choice
-      linkedFileHandle = handle;
-      pendingReconnectHandle = null;
-      lastKnownFileMtime = savedMtime;
-      updateStorageIndicator();
-      showConflictBanner("file", fileName);
-      renderAll();
-      return;
-    }
-
-    const preSnapshot = tasks.some((t) => !t.isSample) ? cloneTasks(tasks) : null;
-    await loadFromFileHandle(handle);
-    if (preSnapshot) {
-      pushUndoSnapshot(preSnapshot, `Reconnected "${fileName}"`);
-    }
-    renderAll();
-    showToast(`Reconnected ${fileName}`, { showUndo: Boolean(preSnapshot), duration: 4000 });
   } catch (err) {
-    console.warn("Could not reconnect file handle:", err);
-    showToast(`Could not reconnect ${fileName} — file may have moved or been deleted`, {
-      duration: 5000,
-    });
-  }
-}
-
-function readLocalBackupTasks() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? normalizeTaskList(parsed) : null;
-  } catch {
-    return null;
+    showBanner(`Could not reconnect: ${err.message || err}`, [{ label: "Open file", onClick: () => pickAndLinkFile("open") }], true);
   }
 }
 
 async function loadInitialTasks() {
   if (useServerApi) {
-    try {
-      const data = await apiRequest("/api/tasks");
-      tasks = normalizeTaskList(data.tasks);
-      if (data.mtimeMs !== undefined) lastKnownServerMtime = data.mtimeMs;
-      saveLocalBackup();
-      document.getElementById("storage-tag").title =
-        data.dataFile || "Saved directly to tasks.json";
-      updateStorageIndicator();
-      return;
-    } catch (err) {
-      console.warn("Python API unavailable, falling back to browser storage:", err);
-      useServerApi = false;
-    }
-  }
-
-  const localBackup = readLocalBackupTasks();
-
-  // Offline mode: inspect IndexedDB for a previously linked file handle
-  if (supportsDirectFileAccess()) {
-    const savedHandle = await loadHandleFromIdb();
-    if (savedHandle && typeof savedHandle.queryPermission === "function") {
-      try {
-        const perm = await savedHandle.queryPermission({ mode: "readwrite" });
-        if (perm === "granted") {
-          if (isLocalDirty() && localBackup !== null) {
-            // Browser holds edits that failed to write earlier: never silently overwrite them with disk
-            tasks = localBackup;
-            linkedFileHandle = savedHandle;
-            pendingReconnectHandle = null;
-            const savedMtime = getSavedSyncMtime();
-            const diskFile = await savedHandle.getFile();
-            if (savedMtime !== null && diskFile.lastModified === savedMtime) {
-              lastKnownFileMtime = diskFile.lastModified;
-              await writeLinkedFile({ force: true });
-            } else {
-              lastKnownFileMtime = savedMtime;
-              showConflictBanner("file", savedHandle.name);
-            }
-            updateStorageIndicator();
-            return;
-          }
-          await loadFromFileHandle(savedHandle);
-          return;
-        }
-        if (perm === "prompt") {
-          pendingReconnectHandle = savedHandle;
-        }
-      } catch {
-        // ignore stale handle errors
-      }
-    }
-  }
-
-  if (localBackup !== null) {
-    tasks = localBackup;
-    updateStorageIndicator();
+    await loadFromServer({ merge: false });
     return;
   }
 
-  if (!localStorage.getItem(SAMPLE_FLAG_KEY)) {
-    tasks = createSampleTasks();
-    await persistOffline();
-  } else {
+  try {
+    const rawV2 = localStorage.getItem(STORAGE_KEY);
+    const rawV1 = localStorage.getItem(LEGACY_STORAGE_KEY);
+    if (rawV2) {
+      tasks = parseTaskDocument(JSON.parse(rawV2)).tasks;
+    } else if (rawV1) {
+      safeLocalSet(`horizon_v1_backup_${toDateKey(new Date())}`, rawV1);
+      tasks = parseTaskDocument(JSON.parse(rawV1)).tasks;
+      saveLocalCache(serializeTaskDocument(tasks, DEVICE_ID));
+    } else if (!localStorage.getItem(SAMPLE_FLAG_KEY)) {
+      tasks = createSampleTasks();
+      saveLocalCache(serializeTaskDocument(tasks, DEVICE_ID));
+    }
+  } catch {
     tasks = [];
   }
+
+  if (supportsDirectFileAccess()) {
+    const savedHandle = await loadStoredHandle();
+    if (savedHandle) {
+      try {
+        const perm = await savedHandle.queryPermission({ mode: "readwrite" });
+        if (perm === "granted") {
+          await attachFileHandle(savedHandle);
+          return;
+        }
+        reconnectHandle = savedHandle;
+        showBanner(`Previously synced with ${savedHandle.name}.`, [
+          { label: `Reconnect ${savedHandle.name}`, onClick: reconnectSavedFile },
+          { label: "Stay local", onClick: hideBanner },
+        ]);
+      } catch {
+        // Handle no longer valid
+      }
+    }
+  }
+
+  syncState = "local";
   updateStorageIndicator();
 }
 
-// --- Task Actions ---
+// ============================================================================
+// 4. Task Mutations, Today Cap (3), & Targeted Undo
+// ============================================================================
 
-async function addTask(rawTitle, explicitDueDate, explicitToday, { force = false } = {}) {
-  return enqueueMutation(async () => {
-    const parsed = parseQuickCapture(rawTitle, new Date());
-    const cleanTitle = (parsed.title || "").trim();
-    if (!cleanTitle) return { ok: false };
+function showToast(text, undoDelta = null) {
+  const toast = document.getElementById("toast");
+  const textEl = document.getElementById("toast-text");
+  const undoBtn = document.getElementById("toast-undo-btn");
 
-    // Preserve Do-Date vs Due-Date: undated Today tasks keep dueDate: ""
-    const resolvedDate = explicitDueDate || parsed.dueDate || "";
-    const putInToday = Boolean(explicitToday || parsed.putInToday);
-    const snapshot = cloneTasks(tasks);
-    const undoLabel = `Added "${cleanTitle}"`;
+  if (undoEntry && undoEntry.timerId) clearTimeout(undoEntry.timerId);
+  textEl.textContent = text;
+  undoBtn.classList.toggle("hidden", !undoDelta);
+  toast.classList.remove("hidden");
 
-    if (useServerApi) {
-      const res = await serverMutate("/api/tasks", {
-        method: "POST",
-        body: { title: cleanTitle, dueDate: resolvedDate, today: putInToday },
-        force,
-        actionName: "add task",
-      });
-      if (!res.ok) {
-        if (res.conflict) {
-          showConflictBanner("server", "tasks.json", async () => {
-            const retryRes = await addTask(rawTitle, explicitDueDate, explicitToday, { force: true });
-            if (retryRes && retryRes.ok) {
-              const titleInput = document.getElementById("task-title-input");
-              const dateInput = document.getElementById("task-date-input");
-              const todayInput = document.getElementById("task-today-input");
-              if (titleInput.value === rawTitle) {
-                titleInput.value = "";
-                dateInput.value = "";
-                todayInput.checked = false;
-                syncQuickDatePills();
-              }
-            }
-            return retryRes;
-          });
-        }
-        return res;
-      }
-      pushUndoSnapshot(snapshot, undoLabel);
-      renderAll();
-      return { ok: true };
-    }
+  const timerId = setTimeout(() => {
+    toast.classList.add("hidden");
+    undoEntry = null;
+  }, 5500);
 
-    pushUndoSnapshot(snapshot, undoLabel);
-    const now = Date.now();
-    const initialStatus = putInToday ? "today" : "inbox";
-    const newTask = normalizeTask({
-      id: makeId("t"),
-      title: cleanTitle,
-      dueDate: resolvedDate,
-      status: initialStatus,
-      previousStatus: initialStatus,
-      notes: "",
-      subtasks: [],
-      recurrence: "",
-      recurrenceSpawnedId: null,
-      createdAt: now,
-      updatedAt: now,
-      completedAt: null,
-    });
-
-    tasks.unshift(newTask);
-    await persistOffline();
-    renderAll();
-    return { ok: true };
-  });
+  undoEntry = { delta: undoDelta, timerId };
 }
 
-async function updateTask(taskId, patch, options = {}) {
-  return enqueueMutation(async () => {
-    const existing = tasks.find((item) => item.id === taskId);
-    if (!existing) return { ok: false, status: 404 };
+/** Restore only the tasks touched by the undone action so newer edits/merges survive. */
+async function performUndo() {
+  if (!undoEntry || !undoEntry.delta) return;
+  const { delta, timerId } = undoEntry;
+  clearTimeout(timerId);
+  undoEntry = null;
+  document.getElementById("toast").classList.add("hidden");
 
-    const isTransitionToDone = existing.status !== "done" && patch.status === "done";
-    const isStatusMove =
-      patch.status !== undefined &&
-      patch.status !== "done" &&
-      existing.status !== patch.status;
-    const preActionSnapshot = cloneTasks(tasks);
-    const patchFields = Object.keys(patch).sort().join(",");
-    const undoLabel = options.undoLabel
-      ? options.undoLabel
-      : isTransitionToDone
-        ? `Completed "${existing.title}"`
-        : isStatusMove
-          ? patch.status === "today"
-            ? `Pulled "${existing.title}" into Today`
-            : `Moved "${existing.title}" to Inbox`
-          : `Updated "${existing.title}"`;
-    const coalesceKey =
-      isTransitionToDone || isStatusMove || options.toastMessage
-        ? null
-        : `${taskId}:${patchFields}`;
+  const now = new Date();
+  const nowMs = now.getTime();
+  const byId = new Map(tasks.map((t) => [t.id, t]));
 
-    let spawnedTask = null;
-
-    if (useServerApi) {
-      const res = await serverMutate(`/api/tasks/${encodeURIComponent(taskId)}`, {
-        method: "PATCH",
-        body: patch,
-        force: Boolean(options.force),
-        actionName: "update task",
-      });
-      if (!res.ok) {
-        if (res.conflict) {
-          showConflictBanner("server", "tasks.json", () =>
-            updateTask(taskId, patch, { ...options, force: true })
-          );
-          renderAll();
-        }
-        return res;
-      }
-      pushUndoSnapshot(preActionSnapshot, undoLabel, coalesceKey);
-      spawnedTask = res.data && res.data.spawnedTask ? normalizeTask(res.data.spawnedTask) : null;
-      renderAll();
+  for (const [id, prevTask] of delta.entries()) {
+    if (prevTask === null) {
+      const cur = byId.get(id);
+      if (cur) byId.set(id, applyTaskTransition(cur, { deleted: true }, now));
     } else {
-      const patched = applyTaskPatch(tasks, taskId, patch, new Date(), Date.now());
-      if (!patched) return { ok: false, status: 404 };
-      pushUndoSnapshot(preActionSnapshot, undoLabel, coalesceKey);
-      tasks = patched.tasks;
-      spawnedTask = patched.spawnedTask;
-      await persistOffline();
-      renderAll();
+      byId.set(id, normalizeTask({ ...prevTask, updatedAt: nowMs }, now));
     }
+  }
 
-    if (isTransitionToDone) {
-      if (spawnedTask) {
-        showToast(
-          `Completed "${existing.title}" · Next (${spawnedTask.recurrence}) due ${formatShortDate(spawnedTask.dueDate)}`,
-          { showUndo: true }
-        );
-      } else {
-        showToast(undoLabel, { showUndo: true });
-      }
-    } else if (options.toastMessage) {
-      showToast(options.toastMessage, { showUndo: true, duration: 4500 });
-    } else if (isStatusMove) {
-      showToast(undoLabel, { showUndo: true, duration: 4000 });
-    }
-    return { ok: true };
+  tasks = Array.from(byId.values()).filter(Boolean);
+  await persistState();
+  renderAll();
+}
+
+function todayActiveList() {
+  return activeTasks().filter((t) => t.list === "today");
+}
+
+async function addTask(title, dueDate, putInToday, forceToday = false, area = "work") {
+  const cleanTitle = title.trim();
+  if (!cleanTitle) return;
+
+  if (putInToday && !forceToday && todayActiveList().length >= TODAY_CAP) {
+    pendingSwap = { kind: "add", title: cleanTitle, dueDate, area };
+    renderLists();
+    return;
+  }
+
+  const created = createTask({
+    title: cleanTitle,
+    dueDate,
+    area,
+    list: putInToday ? "today" : "later",
   });
+  tasks.unshift(created);
+  pendingSwap = null;
+  await persistState();
+  renderAll();
+}
+
+async function updateTask(taskId, patch, { undoLabel = null, forceToday = false } = {}) {
+  const idx = tasks.findIndex((t) => t.id === taskId && !t.deleted);
+  if (idx === -1) return;
+  const current = tasks[idx];
+
+  if (
+    patch.list === "today" &&
+    current.list !== "today" &&
+    !forceToday &&
+    todayActiveList().length >= TODAY_CAP
+  ) {
+    pendingSwap = { kind: "move", taskId };
+    renderLists();
+    return;
+  }
+
+  const isTransitionToDone = current.list !== "done" && patch.list === "done";
+  const undoDelta = undoLabel ? new Map([[taskId, cloneTask(current)]]) : null;
+  const movingStartedOutOfToday =
+    current.list === "today" &&
+    patch.list === "later" &&
+    current.stage === "started" &&
+    !current.nextStep;
+
+  const updated = applyTaskTransition(current, patch);
+  tasks[idx] = updated;
+  pendingSwap = null;
+
+  let spawnedTask = null;
+  if (isTransitionToDone && updated.recurrence) {
+    const recResult = spawnNextRecurrence(updated, tasks);
+    if (recResult) {
+      tasks[idx] = recResult.updatedCompleted;
+      spawnedTask = recResult.spawnedTask;
+      tasks.unshift(spawnedTask);
+      if (undoDelta) undoDelta.set(spawnedTask.id, null);
+    }
+  }
+
+  if (movingStartedOutOfToday) {
+    editingStage = { id: taskId, mode: "started", prompt: "Where did you leave this?" };
+    pendingFocusTarget = { taskId, key: "stage-input" };
+  }
+
+  await persistState();
+  renderAll();
+  const finalToast = spawnedTask
+    ? `Completed "${current.title}" · Next (${spawnedTask.recurrence}) due ${formatShortDate(spawnedTask.dueDate)}`
+    : undoLabel;
+  if (finalToast && undoDelta) showToast(finalToast, undoDelta);
+}
+
+async function executeSwap(swapOutTaskId) {
+  if (!pendingSwap) return;
+  const swapInfo = pendingSwap;
+  pendingSwap = null;
+
+  const outIdx = tasks.findIndex((t) => t.id === swapOutTaskId && !t.deleted);
+  if (outIdx !== -1) {
+    const outTask = tasks[outIdx];
+    const promptNext = outTask.stage === "started" && !outTask.nextStep;
+    tasks[outIdx] = applyTaskTransition(outTask, { list: "later" });
+    if (promptNext) {
+      editingStage = { id: outTask.id, mode: "started", prompt: "Where did you leave this?" };
+      pendingFocusTarget = { taskId: outTask.id, key: "stage-input" };
+    }
+  }
+
+  if (swapInfo.kind === "add") {
+    tasks.unshift(
+      createTask({ title: swapInfo.title, dueDate: swapInfo.dueDate, area: swapInfo.area || "work", list: "today" })
+    );
+  } else if (swapInfo.kind === "move") {
+    const inIdx = tasks.findIndex((t) => t.id === swapInfo.taskId && !t.deleted);
+    if (inIdx !== -1) tasks[inIdx] = applyTaskTransition(tasks[inIdx], { list: "today" });
+  }
+
+  await persistState();
+  renderAll();
 }
 
 async function toggleDone(taskId) {
-  const task = tasks.find((t) => t.id === taskId);
+  const task = tasks.find((t) => t.id === taskId && !t.deleted);
   if (!task) return;
-  const nextStatus =
-    task.status === "done"
-      ? task.previousStatus === "today"
-        ? "today"
-        : "inbox"
-      : "done";
-  await updateTask(taskId, { status: nextStatus });
+  if (task.list === "done") {
+    const restoreList = task.prevList === "today" && todayActiveList().length < TODAY_CAP ? "today" : "later";
+    await updateTask(taskId, { list: restoreList });
+  } else {
+    await updateTask(taskId, { list: "done" }, { undoLabel: `Completed "${task.title}"` });
+  }
 }
 
-async function deleteTask(taskId, { force = false } = {}) {
-  return enqueueMutation(async () => {
-    const target = tasks.find((t) => t.id === taskId);
-    if (!target) return { ok: false, status: 404 };
-    const snapshot = cloneTasks(tasks);
-    const label = `Deleted "${target.title}"`;
-
-    if (useServerApi) {
-      const res = await serverMutate(`/api/tasks/${encodeURIComponent(taskId)}`, {
-        method: "DELETE",
-        force,
-        actionName: "delete task",
-      });
-      if (!res.ok) {
-        if (res.conflict) {
-          showConflictBanner("server", "tasks.json", () =>
-            deleteTask(taskId, { force: true })
-          );
-        }
-        return res;
-      }
-      if (expandedTaskId === taskId) expandedTaskId = null;
-      pushUndoSnapshot(snapshot, label);
-    } else {
-      if (expandedTaskId === taskId) expandedTaskId = null;
-      pushUndoSnapshot(snapshot, label);
-      tasks = tasks.filter((t) => t.id !== taskId);
-      await persistOffline();
-    }
-    renderAll();
-    showToast(label, { showUndo: true });
-    return { ok: true };
-  });
+async function deleteTask(taskId) {
+  const idx = tasks.findIndex((t) => t.id === taskId && !t.deleted);
+  if (idx === -1) return;
+  const prev = cloneTask(tasks[idx]);
+  tasks[idx] = applyTaskTransition(tasks[idx], { deleted: true });
+  if (inspectedTaskId === taskId) inspectedTaskId = null;
+  if (expandedTaskId === taskId) expandedTaskId = null;
+  if (editingNotesId === taskId) editingNotesId = null;
+  notesDrafts.delete(taskId);
+  stepDrafts.delete(taskId);
+  if (editingStage && editingStage.id === taskId) editingStage = null;
+  await persistState();
+  renderAll();
+  showToast(`Deleted "${prev.title}"`, new Map([[taskId, prev]]));
 }
 
-async function clearCompleted({ force = false } = {}) {
-  return enqueueMutation(async () => {
-    const doneCount = tasks.filter((t) => t.status === "done").length;
-    if (doneCount === 0) return { ok: false };
-    const snapshot = cloneTasks(tasks);
-    const label = `Cleared ${doneCount} completed task${doneCount === 1 ? "" : "s"}`;
-
-    if (useServerApi) {
-      const res = await serverMutate("/api/tasks/clear-done", {
-        method: "POST",
-        body: {},
-        force,
-        actionName: "clear completed tasks",
-      });
-      if (!res.ok) {
-        if (res.conflict) {
-          showConflictBanner("server", "tasks.json", () => clearCompleted({ force: true }));
-        }
-        return res;
-      }
-      pushUndoSnapshot(snapshot, label);
-    } else {
-      pushUndoSnapshot(snapshot, label);
-      tasks = tasks.filter((t) => t.status !== "done");
-      await persistOffline();
-    }
-    renderAll();
-    showToast(label, { showUndo: true });
-    return { ok: true };
-  });
+async function clearMatching(predicate, labelFn, afterFn = null) {
+  const targets = activeTasks().filter(predicate);
+  if (targets.length === 0) return;
+  const delta = new Map(targets.map((t) => [t.id, cloneTask(t)]));
+  const targetIds = new Set(delta.keys());
+  tasks = tasks.map((t) => (targetIds.has(t.id) ? applyTaskTransition(t, { deleted: true }) : t));
+  if (afterFn) afterFn();
+  await persistState();
+  renderAll();
+  showToast(labelFn(targets.length), delta);
 }
 
-async function clearSamples({ force = false } = {}) {
-  return enqueueMutation(async () => {
-    if (!tasks.some((t) => t.isSample)) return { ok: false };
-    const snapshot = cloneTasks(tasks);
-    const label = "Cleared sample tasks";
+const clearCompleted = () =>
+  clearMatching((t) => t.list === "done", (n) => `Cleared ${n} completed task${n === 1 ? "" : "s"}`);
 
-    if (useServerApi) {
-      const res = await serverMutate("/api/tasks/clear-samples", {
-        method: "POST",
-        body: {},
-        force,
-        actionName: "clear sample tasks",
-      });
-      if (!res.ok) {
-        if (res.conflict) {
-          showConflictBanner("server", "tasks.json", () => clearSamples({ force: true }));
-        }
-        return res;
-      }
-      pushUndoSnapshot(snapshot, label);
-    } else {
-      pushUndoSnapshot(snapshot, label);
-      tasks = tasks.filter((t) => !t.isSample);
-      localStorage.setItem(SAMPLE_FLAG_KEY, "1");
-      await persistOffline();
-    }
-    renderAll();
-    showToast(label, { showUndo: true });
-    return { ok: true };
-  });
-}
+const clearSamples = () =>
+  clearMatching(
+    (t) => Boolean(t.isSample),
+    () => "Cleared sample tasks",
+    () => safeLocalSet(SAMPLE_FLAG_KEY, "1")
+  );
 
-// --- Filtering & Search ---
+// ============================================================================
+// 5. Rendering (Header, Horizon Timeline, Lists, Inline Editors)
+// ============================================================================
 
-function isFilterActive() {
-  return Boolean(activeTag || searchQuery.trim());
-}
-
-function taskMatchesFilters(task) {
+function matchesSearch(task) {
   if (activeTag) {
     const tags = new Set([
       ...extractTags(task.title),
@@ -1234,81 +872,372 @@ function taskMatchesFilters(task) {
     ]);
     if (!tags.has(activeTag)) return false;
   }
-
-  const q = searchQuery.trim().toLowerCase();
-  if (q) {
-    const inTitle = (task.title || "").toLowerCase().includes(q);
-    const inNotes = (task.notes || "").toLowerCase().includes(q);
-    const inSubtasks =
-      Array.isArray(task.subtasks) &&
-      task.subtasks.some((s) => (s.text || "").toLowerCase().includes(q));
-    if (!inTitle && !inNotes && !inSubtasks) return false;
-  }
-
-  return true;
+  if (!searchQuery) return true;
+  const q = searchQuery.toLowerCase();
+  const inSubtasks =
+    Array.isArray(task.subtasks) &&
+    task.subtasks.some((s) => (s.title || "").toLowerCase().includes(q));
+  return (
+    task.title.toLowerCase().includes(q) ||
+    (task.nextStep && task.nextStep.toLowerCase().includes(q)) ||
+    (task.waitingOn && task.waitingOn.toLowerCase().includes(q)) ||
+    (task.area && task.area.toLowerCase().includes(q)) ||
+    (task.notes && task.notes.toLowerCase().includes(q)) ||
+    inSubtasks
+  );
 }
 
-function renderFilterBar() {
-  const searchInput = document.getElementById("search-input");
-  const clearSearchBtn = document.getElementById("search-clear-btn");
-  const tagChipsEl = document.getElementById("tag-chips");
-  const clearFiltersBtn = document.getElementById("clear-filters-btn");
+function renderTagBar() {
+  const barEl = document.getElementById("tag-bar");
+  const chipsEl = document.getElementById("tag-chips");
+  const clearBtn = document.getElementById("clear-tag-btn");
+  if (!barEl || !chipsEl || !clearBtn) return;
 
-  if (searchInput.value !== searchQuery) {
-    searchInput.value = searchQuery;
-  }
-  clearSearchBtn.classList.toggle("hidden", !searchQuery);
+  const tags = getAllTags(activeTasks());
+  const displayTags = activeTag && !tags.includes(activeTag) ? [activeTag, ...tags] : tags;
 
-  const tags = getAllTags(tasks);
-  const displayTags =
-    activeTag && !tags.includes(activeTag) ? [activeTag, ...tags] : tags;
-
-  tagChipsEl.replaceChildren();
+  chipsEl.replaceChildren();
   if (displayTags.length === 0) {
-    tagChipsEl.classList.add("hidden");
-  } else {
-    tagChipsEl.classList.remove("hidden");
-    displayTags.forEach((tag) => {
-      const chip = document.createElement("button");
-      chip.type = "button";
-      const isActive = activeTag === tag;
-      chip.className = `tag-chip${isActive ? " active" : ""}`;
-      chip.dataset.tag = tag;
-      chip.setAttribute("aria-pressed", String(isActive));
-      chip.textContent = `#${tag}`;
-      chip.title = isActive ? `Clear #${tag} filter` : `Filter by #${tag}`;
-      chip.addEventListener("click", () => {
+    barEl.classList.add("hidden");
+    clearBtn.classList.add("hidden");
+    return;
+  }
+
+  barEl.classList.remove("hidden");
+  displayTags.forEach((tag) => {
+    const isActive = activeTag === tag;
+    const chip = makeButton(
+      `#${tag}`,
+      `tag-chip${isActive ? " active" : ""}`,
+      () => {
         activeTag = isActive ? null : tag;
         renderAll();
         const nextChip = document.querySelector(`.tag-chip[data-tag="${CSS.escape(tag)}"]`);
         if (nextChip) nextChip.focus();
-      });
-      tagChipsEl.appendChild(chip);
+      },
+      {
+        "data-tag": tag,
+        "aria-pressed": String(isActive),
+        title: isActive ? `Clear #${tag} filter` : `Filter by #${tag}`,
+      }
+    );
+    chipsEl.appendChild(chip);
+  });
+  clearBtn.classList.toggle("hidden", !activeTag);
+}
+
+function finishCheckin(toastMsg = null) {
+  checkinMode = "hidden";
+  checkinCards = [];
+  checkinIndex = 0;
+  savePrefs({ lastCheckinDate: toDateKey(new Date()) });
+  renderCheckin();
+  // Never overwrite an active Undo toast
+  if (toastMsg && !undoEntry?.delta) showToast(toastMsg);
+}
+
+function startCheckinCards() {
+  if (!document.getElementById("system-banner").classList.contains("hidden")) {
+    showToast("Resolve or dismiss the top alert banner first.");
+    return;
+  }
+  const data = getMorningCheckinData(tasks);
+  if (data.cards.length === 0) {
+    showToast("All clear — nothing pending for check-in.");
+    return;
+  }
+  checkinCards = data.cards;
+  checkinIndex = 0;
+  checkinMode = "cards";
+  renderCheckin();
+}
+
+function advanceCheckin(expectedTaskId = null) {
+  // If renderCheckin() already advanced when the card's task was completed/deleted, don't advance twice
+  if (expectedTaskId && checkinCards[checkinIndex]?.task?.id !== expectedTaskId) return;
+
+  checkinIndex += 1;
+  while (checkinIndex < checkinCards.length) {
+    const id = checkinCards[checkinIndex].task.id;
+    if (activeTasks().some((t) => t.id === id && t.list !== "done")) break;
+    checkinIndex += 1;
+  }
+  if (checkinIndex >= checkinCards.length) {
+    finishCheckin("Morning check-in complete.");
+  } else {
+    renderCheckin();
+  }
+}
+
+function appendFreshnessButtons(container, task, { keepCls, btnCls, dropCls, after = null }) {
+  container.appendChild(
+    makeButton("Keep", keepCls, async () => {
+      await updateTask(task.id, { touch: true, snoozedUntil: null });
+      if (after) after();
+    })
+  );
+  container.appendChild(
+    makeButton("Snooze 2w", btnCls, async () => {
+      await updateTask(task.id, { snoozedUntil: addDaysKey(new Date(), 14) });
+      if (after) after();
+    })
+  );
+  container.appendChild(
+    makeButton("Drop", dropCls, async () => {
+      await deleteTask(task.id);
+      if (after) after();
+    })
+  );
+}
+
+function needsUnlinkedExportReminder() {
+  if (useServerApi || linkedFileHandle) return false;
+  if (!activeTasks().some((t) => !t.isSample)) return false;
+  return (uiPrefs.lastLocalEditAt || 0) > (uiPrefs.lastExportAt || 0);
+}
+
+function renderCheckin() {
+  const el = document.getElementById("checkin-banner");
+  const systemBannerVisible = !document.getElementById("system-banner").classList.contains("hidden");
+  if (systemBannerVisible || checkinMode === "hidden") {
+    el.classList.add("hidden");
+    return;
+  }
+
+  const now = new Date();
+  const todayStr = toDateKey(now);
+  if (checkinMode === "auto") {
+    if (uiPrefs.lastCheckinDate === todayStr) {
+      el.classList.add("hidden");
+      return;
+    }
+    const { counts, cards } = getMorningCheckinData(tasks, now);
+    const isMonday = now.getDay() === 1;
+    const lastWeek = isMonday ? getWeeklyMomentum(activeTasks(), now, { lastWeek: true }) : { tasksDone: 0, stepsDone: 0 };
+    const hasMondayWins = isMonday && lastWeek.tasksDone + lastWeek.stepsDone > 0;
+    const showExportHint = needsUnlinkedExportReminder();
+
+    if (cards.length === 0 && !hasMondayWins && !showExportHint) {
+      el.classList.add("hidden");
+      return;
+    }
+
+    const parts = [];
+    if (counts.started) parts.push(`${counts.started} started`);
+    if (counts.waiting) parts.push(`${counts.waiting} waiting`);
+    if (counts.dueSoon) parts.push(`${counts.dueSoon} due soon`);
+    if (counts.fading) parts.push(`${counts.fading} fading`);
+
+    el.innerHTML = "";
+
+    if (hasMondayWins) {
+      const winsEl = document.createElement("div");
+      winsEl.className = "checkin-wins-line";
+      const winParts = [];
+      if (lastWeek.tasksDone) winParts.push(`${lastWeek.tasksDone} done`);
+      if (lastWeek.stepsDone) winParts.push(`${lastWeek.stepsDone} step${lastWeek.stepsDone === 1 ? "" : "s"}`);
+      winsEl.textContent = `Last week: ${winParts.join(" · ")}`;
+      el.appendChild(winsEl);
+    }
+
+    const row = document.createElement("div");
+    row.className = "checkin-summary-row";
+
+    const text = document.createElement("span");
+    text.className = "checkin-summary-text";
+    const strong = document.createElement("strong");
+    strong.textContent = "Morning";
+    text.appendChild(strong);
+    text.appendChild(document.createTextNode(parts.length ? ` · ${parts.join(" · ")}` : " · All clear for today"));
+
+    const actions = document.createElement("div");
+    actions.className = "system-banner-actions";
+    if (cards.length > 0) actions.appendChild(makeButton("Plan today", "banner-btn", startCheckinCards));
+    actions.appendChild(makeButton("Skip", "row-btn", () => finishCheckin()));
+
+    row.appendChild(text);
+    row.appendChild(actions);
+    el.appendChild(row);
+
+    if (showExportHint) {
+      const expRow = document.createElement("div");
+      expRow.className = "checkin-export-row";
+      const msg = document.createElement("span");
+      msg.textContent = "Saved on this PC only — export tasks.json to sync via OneDrive.";
+      expRow.appendChild(msg);
+      expRow.appendChild(
+        makeButton("Export now", "banner-btn", () => {
+          exportJson();
+          renderCheckin();
+        })
+      );
+      el.appendChild(expRow);
+    }
+
+    el.classList.remove("hidden");
+    return;
+  }
+
+  // Card walk-through mode
+  const entry = checkinCards[checkinIndex];
+  const liveTask = entry ? activeTasks().find((t) => t.id === entry.task.id && t.list !== "done") : null;
+  if (!liveTask) {
+    advanceCheckin(false);
+    return;
+  }
+
+  const kindLabel = {
+    started: "Started",
+    dueSoon: "Due soon",
+    waiting: "Waiting on",
+    fading: "Fading (14d+)",
+  }[entry.kind];
+
+  el.innerHTML = "";
+  const card = document.createElement("div");
+  card.className = "checkin-card";
+
+  const body = document.createElement("div");
+  body.className = "checkin-card-body";
+
+  const kicker = document.createElement("span");
+  kicker.className = "checkin-card-kicker";
+  const dueMeta = liveTask.dueDate ? ` · ${formatShortDate(liveTask.dueDate)} (${formatDaysLabel(daysUntil(liveTask.dueDate))})` : "";
+  kicker.textContent = `${checkinIndex + 1}/${checkinCards.length} · ${kindLabel}${dueMeta}`;
+  body.appendChild(kicker);
+
+  const title = document.createElement("span");
+  title.className = "checkin-card-title";
+  title.textContent = liveTask.title;
+  body.appendChild(title);
+
+  if (liveTask.stage === "waiting" && liveTask.waitingOn) {
+    const sub = document.createElement("span");
+    sub.className = "checkin-card-sub";
+    sub.textContent = `◷ Waiting on ${liveTask.waitingOn}${liveTask.nextStep ? ` · ${liveTask.nextStep}` : ""}`;
+    body.appendChild(sub);
+  } else if (liveTask.nextStep) {
+    const sub = document.createElement("span");
+    sub.className = "checkin-card-sub";
+    sub.textContent = `→ ${liveTask.nextStep}`;
+    body.appendChild(sub);
+  }
+
+  const actions = document.createElement("div");
+  actions.className = "checkin-card-actions";
+
+  if (entry.kind === "started" || entry.kind === "dueSoon") {
+    if (liveTask.list === "today") {
+      actions.appendChild(makeButton("Keep in Today", "banner-btn", () => advanceCheckin(liveTask.id)));
+      actions.appendChild(
+        makeButton("Later", "row-btn", async () => {
+          await updateTask(liveTask.id, { list: "later" });
+          advanceCheckin(liveTask.id);
+        })
+      );
+    } else if (todayActiveList().length < TODAY_CAP) {
+      actions.appendChild(
+        makeButton("★ Today", "banner-btn", async () => {
+          await updateTask(liveTask.id, { list: "today" });
+          const moved = activeTasks().some((t) => t.id === liveTask.id && t.list === "today");
+          if (moved) {
+            if (todayActiveList().length >= TODAY_CAP && !undoEntry?.delta) {
+              showToast(`Today is full (${TODAY_CAP}/${TODAY_CAP}) — finishing remaining cards.`);
+            }
+            advanceCheckin(liveTask.id);
+          }
+        })
+      );
+      actions.appendChild(makeButton("Keep in Later", "row-btn", () => advanceCheckin(liveTask.id)));
+    } else {
+      actions.appendChild(makeButton("Keep in Later", "banner-btn", () => advanceCheckin(liveTask.id)));
+    }
+    actions.appendChild(
+      makeButton("✓ Done", "row-btn", async () => {
+        await toggleDone(liveTask.id);
+        advanceCheckin(liveTask.id);
+      })
+    );
+  } else if (entry.kind === "waiting") {
+    actions.appendChild(
+      makeButton("Still waiting", "banner-btn", async () => {
+        await updateTask(liveTask.id, { touch: true });
+        advanceCheckin(liveTask.id);
+      })
+    );
+    actions.appendChild(
+      makeButton("◐ Resume", "row-btn", async () => {
+        await updateTask(liveTask.id, { stage: "started", waitingOn: null });
+        advanceCheckin(liveTask.id);
+      })
+    );
+    actions.appendChild(
+      makeButton("✓ Done", "row-btn", async () => {
+        await toggleDone(liveTask.id);
+        advanceCheckin(liveTask.id);
+      })
+    );
+  } else {
+    appendFreshnessButtons(actions, liveTask, {
+      keepCls: "banner-btn",
+      btnCls: "row-btn",
+      dropCls: "row-btn del",
+      after: () => advanceCheckin(liveTask.id),
     });
   }
 
-  clearFiltersBtn.classList.toggle("hidden", !isFilterActive());
+  actions.appendChild(makeButton("Finish", "row-btn", () => finishCheckin()));
+  card.appendChild(body);
+  card.appendChild(actions);
+  el.appendChild(card);
+  el.classList.remove("hidden");
 }
 
-// --- Rendering ---
+function runEndDayRitual(fromChain = false) {
+  const startedMissing = [
+    ...todayActiveList().filter((t) => t.stage === "started" && !t.nextStep),
+    ...activeTasks().filter((t) => t.list === "later" && t.stage === "started" && !t.nextStep),
+  ];
+  const nextTask = startedMissing[0];
+  if (nextTask) {
+    if (searchQuery && !matchesSearch(nextTask)) {
+      searchQuery = "";
+      document.getElementById("search-input").value = "";
+      document.getElementById("search-bar").classList.add("hidden");
+    }
+    editingStage = {
+      id: nextTask.id,
+      mode: "started",
+      prompt: `End day (${startedMissing.length} left) — where did you leave this?`,
+      endDayChain: true,
+    };
+    pendingFocusTarget = { taskId: nextTask.id, key: "stage-input" };
+    renderAll();
+    return;
+  }
+  showToast(
+    fromChain ? "End day complete — every started task has a next step." : "All started tasks already have a next step."
+  );
+}
 
 function renderHeader() {
   const now = new Date();
-  document.getElementById("today-label").textContent = now.toLocaleDateString("en-US", {
+  document.getElementById("today-label").textContent = now.toLocaleDateString(undefined, {
     weekday: "short",
     month: "short",
     day: "numeric",
   });
-  const hasSamples = tasks.some((t) => t.isSample);
-  document.getElementById("clear-samples-btn").classList.toggle("hidden", !hasSamples);
+  const live = activeTasks();
+  document.getElementById("clear-samples-btn").classList.toggle("hidden", !live.some((t) => t.isSample));
 
-  // Glanceable pinned-tab title (unfiltered active counts)
   let overdueCount = 0;
   let todayCount = 0;
-  tasks.forEach((t) => {
-    if (t.status === "done") return;
-    if (t.status === "today") todayCount += 1;
-    if (t.dueDate && daysUntil(t.dueDate, now) < 0) overdueCount += 1;
+  live.forEach((t) => {
+    if (t.list === "done") return;
+    if (t.list === "today") todayCount += 1;
+    if (t.dueDate && parseDateKey(t.dueDate) && daysUntil(t.dueDate, now) < 0) {
+      overdueCount += 1;
+    }
   });
   const parts = ["Horizon"];
   if (overdueCount > 0) parts.push(`${overdueCount} overdue`);
@@ -1316,26 +1245,63 @@ function renderHeader() {
   document.title = parts.join(" · ");
 }
 
-function snoozeTaskByDays(task, deltaDays) {
-  const nextDate = addDaysToKey(toDateKey(new Date()), deltaDays);
-  if (!nextDate) return;
-  const label = `Snoozed "${task.title}" to ${formatShortDate(nextDate)}`;
-  updateTask(task.id, { dueDate: nextDate }, { undoLabel: label, toastMessage: label });
-}
-
-function handleTimelineTaskClick(task) {
-  if (task.status !== "today") {
-    updateTask(task.id, { status: "today" });
+function renderTimelineInspector(allActive) {
+  const box = document.getElementById("timeline-inspector");
+  const task = inspectedTaskId ? allActive.find((t) => t.id === inspectedTaskId && t.list !== "done") : null;
+  if (!task) {
+    inspectedTaskId = null;
+    box.classList.add("hidden");
     return;
   }
-  expandedTaskId = expandedTaskId === task.id ? null : task.id;
-  renderAll();
-  if (expandedTaskId === task.id) {
-    const rowEl = document.querySelector(`[data-task-id="${CSS.escape(task.id)}"]`);
-    if (rowEl) {
-      rowEl.scrollIntoView({ behavior: "smooth", block: "nearest" });
-    }
+
+  box.innerHTML = "";
+  const info = document.createElement("div");
+  info.className = "timeline-inspector-info";
+
+  const name = document.createElement("strong");
+  name.textContent = task.title;
+  info.appendChild(name);
+
+  if (task.stage === "waiting" && task.waitingOn) {
+    const w = document.createElement("span");
+    w.className = "meta-mono";
+    w.textContent = `◷ Waiting on ${task.waitingOn}`;
+    info.appendChild(w);
+  } else if (task.nextStep) {
+    const ns = document.createElement("span");
+    ns.className = "meta-mono";
+    ns.textContent = `→ ${task.nextStep}`;
+    info.appendChild(ns);
   }
+
+  const actions = document.createElement("div");
+  actions.className = "timeline-inspector-actions";
+
+  if (task.list !== "today" && task.stage !== "waiting") {
+    actions.appendChild(makeButton("→ Today", "banner-btn", () => updateTask(task.id, { list: "today" })));
+  } else if (task.list === "today") {
+    actions.appendChild(makeButton("Later", "banner-btn", () => updateTask(task.id, { list: "later" })));
+  }
+
+  actions.appendChild(
+    makeButton(task.stage === "started" ? "Edit next step" : "◐ Start", "banner-btn", () => {
+      editingStage = { id: task.id, mode: "started" };
+      pendingFocusTarget = { taskId: task.id, key: "stage-input" };
+      if (task.stage !== "started") updateTask(task.id, { stage: "started" });
+      else renderLists();
+    })
+  );
+  actions.appendChild(makeButton("✓ Done", "banner-btn", () => toggleDone(task.id)));
+  actions.appendChild(
+    makeButton("×", "banner-btn", () => {
+      inspectedTaskId = null;
+      box.classList.add("hidden");
+    }, { "aria-label": "Close inspector" })
+  );
+
+  box.appendChild(info);
+  box.appendChild(actions);
+  box.classList.remove("hidden");
 }
 
 function renderTimeline() {
@@ -1360,16 +1326,15 @@ function renderTimeline() {
     opt.setAttribute("aria-selected", String(isActive));
   });
 
-  monthsEl.replaceChildren();
-  gridEl.replaceChildren();
-  lanesEl.replaceChildren();
-  overdueEl.replaceChildren();
+  monthsEl.innerHTML = "";
+  gridEl.innerHTML = "";
+  lanesEl.innerHTML = "";
+  overdueEl.innerHTML = "";
+  beyondEl.innerHTML = "";
 
   const now = new Date();
-  const todayStr = toDateKey(now);
-
-  // Adaptive axis markers & vertical grid lines
   const { markers, gridLines } = getTimelineAxis(now, horizonDays);
+
   markers.forEach((m) => {
     const el = document.createElement("div");
     const cls = ["month-marker"];
@@ -1383,20 +1348,16 @@ function renderTimeline() {
   });
 
   gridLines.forEach((g) => {
-    const line = document.createElement("div");
-    line.className = `grid-line${g.isMajor ? " is-major" : ""}`;
-    line.style.left = `${g.percent}%`;
-    gridEl.appendChild(line);
+    const tick = document.createElement("div");
+    tick.className = `grid-line${g.isMajor ? " is-major" : ""}`;
+    tick.style.left = `${g.percent}%`;
+    gridEl.appendChild(tick);
   });
 
-  // Active tasks with a deadline OR currently in Today's Focus, filtered by search/#tag
+  const allActive = activeTasks().filter(matchesSearch);
+  const todayStr = toDateKey(now);
   const timelineTasks = sortTasksByUrgency(
-    tasks.filter(
-      (t) =>
-        t.status !== "done" &&
-        (t.dueDate || t.status === "today") &&
-        taskMatchesFilters(t)
-    ),
+    allActive.filter((t) => t.list !== "done" && (parseDateKey(t.dueDate) || t.list === "today")),
     now
   );
 
@@ -1405,8 +1366,9 @@ function renderTimeline() {
   const beyondHorizon = [];
 
   timelineTasks.forEach((t) => {
-    const effectiveDate = t.dueDate || todayStr;
+    const effectiveDate = parseDateKey(t.dueDate) ? t.dueDate : todayStr;
     const days = daysUntil(effectiveDate, now);
+    if (days === null) return;
     if (days < 0) overdueTasks.push({ task: t, days, effectiveDate });
     else if (days <= horizonDays) upcomingTasks.push({ task: t, days, effectiveDate });
     else beyondHorizon.push({ task: t, days, effectiveDate });
@@ -1414,7 +1376,6 @@ function renderTimeline() {
 
   document.getElementById("timeline-count").textContent = String(timelineTasks.length);
 
-  // Overdue strip (with calm 1-click +1w snooze)
   if (overdueTasks.length > 0) {
     overdueEl.classList.remove("hidden");
     const label = document.createElement("span");
@@ -1426,34 +1387,44 @@ function renderTimeline() {
       const group = document.createElement("span");
       group.className = "overdue-chip-group";
 
-      const chip = document.createElement("button");
-      chip.type = "button";
-      chip.className = "overdue-chip";
-      chip.textContent = `${task.title} (${formatDaysLabel(days)})`;
-      chip.title =
-        task.status === "today"
-          ? "In Today's Focus — click to open task details"
-          : "Click to pull into Today";
-      chip.addEventListener("click", () => handleTimelineTaskClick(task));
+      group.appendChild(
+        makeButton(
+          `${task.title} (${formatDaysLabel(days)})`,
+          "overdue-chip",
+          () => {
+            inspectedTaskId = task.id;
+            renderTimelineInspector(allActive);
+          },
+          { title: "Click to inspect or pull into Today" }
+        )
+      );
 
-      const snoozeBtn = document.createElement("button");
-      snoozeBtn.type = "button";
-      snoozeBtn.className = "overdue-snooze-btn";
-      snoozeBtn.textContent = "+1w";
-      snoozeBtn.title = `Snooze "${task.title}" +1 week from today`;
-      snoozeBtn.setAttribute("aria-label", `Snooze "${task.title}" by 1 week`);
-      snoozeBtn.addEventListener("click", () => snoozeTaskByDays(task, 7));
+      group.appendChild(
+        makeButton(
+          "+1w",
+          "overdue-snooze-btn",
+          () => {
+            const nextDate = addDaysKey(now, 7);
+            if (!nextDate) return;
+            updateTask(
+              task.id,
+              { dueDate: nextDate },
+              { undoLabel: `Snoozed "${task.title}" to ${formatShortDate(nextDate)}` }
+            );
+          },
+          {
+            title: `Snooze "${task.title}" +1 week from today`,
+            "aria-label": `Snooze "${task.title}" by 1 week`,
+          }
+        )
+      );
 
-      group.appendChild(chip);
-      group.appendChild(snoozeBtn);
       overdueEl.appendChild(group);
     });
   } else {
     overdueEl.classList.add("hidden");
   }
 
-  // Beyond-horizon clickable chips
-  beyondEl.replaceChildren();
   if (beyondHorizon.length > 0) {
     beyondEl.classList.remove("hidden");
     const beyondLabel = document.createElement("span");
@@ -1462,29 +1433,27 @@ function renderTimeline() {
     beyondEl.appendChild(beyondLabel);
 
     beyondHorizon.forEach(({ task, days, effectiveDate }) => {
-      const chip = document.createElement("button");
-      chip.type = "button";
-      chip.className = "beyond-chip";
-      chip.textContent = `${task.title} (${formatShortDate(effectiveDate)}, ${days}d)`;
-      chip.title =
-        task.status === "today"
-          ? "In Today's Focus — click to open task details"
-          : "Click to pull into Today";
-      chip.addEventListener("click", () => handleTimelineTaskClick(task));
-      beyondEl.appendChild(chip);
+      beyondEl.appendChild(
+        makeButton(
+          `${task.title} (${formatShortDate(effectiveDate)}, ${days}d)`,
+          "beyond-chip",
+          () => {
+            inspectedTaskId = task.id;
+            renderTimelineInspector(allActive);
+          },
+          { title: "Click to inspect or pull into Today" }
+        )
+      );
     });
   } else {
     beyondEl.classList.add("hidden");
   }
 
-  // Expand / collapse >8 lanes
   const hasManyLanes = upcomingTasks.length > 8;
   lanesEl.classList.toggle("is-expanded", Boolean(hasManyLanes && showAllTimeline));
   if (hasManyLanes) {
     footEl.classList.remove("hidden");
-    moreBtn.textContent = showAllTimeline
-      ? "Show less"
-      : `Show all (${upcomingTasks.length})`;
+    moreBtn.textContent = showAllTimeline ? "Show less" : `Show all (${upcomingTasks.length})`;
   } else {
     footEl.classList.add("hidden");
   }
@@ -1492,7 +1461,7 @@ function renderTimeline() {
   if (upcomingTasks.length === 0) {
     const empty = document.createElement("div");
     empty.className = "timeline-empty";
-    if (isFilterActive()) {
+    if (searchQuery || activeTag) {
       empty.textContent = "No matching tasks on this horizon.";
     } else if (beyondHorizon.length > 0) {
       empty.textContent = `No tasks due within ${horizonDays}d.`;
@@ -1500,6 +1469,7 @@ function renderTimeline() {
       empty.textContent = "No dated or Today tasks yet.";
     }
     lanesEl.appendChild(empty);
+    renderTimelineInspector(allActive);
     return;
   }
 
@@ -1507,57 +1477,53 @@ function renderTimeline() {
     const lane = document.createElement("div");
     lane.className = "timeline-lane";
 
-    const isUndatedFocus = !task.dueDate;
-    const style = getGradientStyle(days, horizonDays);
+    const style = getGradientStyle(days, task.area, horizonDays);
     const widthPct = getTimelineWidthPercent(days, horizonDays);
-    const labelOutside = isUndatedFocus || widthPct < 34;
+    const labelOutside = widthPct < 34;
 
-    const dateDesc = task.dueDate
-      ? `${formatShortDate(effectiveDate)} (${formatDaysLabel(days)})`
-      : "Today's Focus (no deadline)";
-    const actionHint =
-      task.status === "today"
-        ? expandedTaskId === task.id
-          ? "Click to close task details."
-          : "In Today — click to open task details."
-        : "Click to pull into Today.";
-    const tooltip = `${task.title} — ${dateDesc}. ${actionHint}`;
+    const inspectHandler = () => {
+      inspectedTaskId = inspectedTaskId === task.id ? null : task.id;
+      renderTimelineInspector(allActive);
+    };
 
-    const bar = document.createElement("button");
-    bar.type = "button";
-    bar.className = `timeline-bar${isUndatedFocus ? " is-focus-undated" : ""}`;
+    const waitingNote = task.stage === "waiting" && task.waitingOn ? ` · Waiting on ${task.waitingOn}` : "";
+    const barTitle = `${task.title} — ${formatShortDate(effectiveDate)} (${formatDaysLabel(days)})${waitingNote}. Click for actions.`;
+
+    const bar = makeButton("", "timeline-bar", inspectHandler, { title: barTitle });
+    if (task.area === "personal") bar.classList.add("is-personal");
+    if (task.list === "today") bar.classList.add("is-today-star");
+    if (task.stage === "waiting") bar.classList.add("is-waiting");
     bar.style.width = `${widthPct}%`;
-    if (!isUndatedFocus) {
-      bar.style.background = style.background;
-      bar.style.borderRightColor = style.borderColor;
-      bar.style.color = style.textColor;
-    }
-    bar.title = tooltip;
-    bar.addEventListener("click", () => handleTimelineTaskClick(task));
+    bar.style.background = style.background;
+    bar.style.borderRightColor = style.borderColor;
+    bar.style.color = style.textColor;
 
-    const titleText = task.status === "today" ? `★ ${task.title}` : task.title;
-    const metaText = task.dueDate
-      ? `${formatShortDate(effectiveDate)} · ${formatDaysLabel(days)}`
-      : "Focus · Today";
+    if (task.stage === "started") {
+      const fill = document.createElement("span");
+      fill.className = "timeline-progress-fill";
+      fill.style.width = `${Math.round(getTaskProgressRatio(task) * 100)}%`;
+      fill.style.background = style.borderColor;
+      bar.appendChild(fill);
+    }
+
+    const prefix = task.list === "today" ? "★ " : task.stage === "started" ? "◐ " : task.stage === "waiting" ? "◷ " : "";
+    const titleText = `${prefix}${task.title}`;
+    const metaText = `${formatShortDate(effectiveDate)} · ${formatDaysLabel(days)}`;
+    const freshness = getTaskFreshness(task);
 
     if (labelOutside) {
-      const outside = document.createElement("button");
-      outside.type = "button";
-      outside.className = "timeline-outside-label";
-      outside.title = tooltip;
-      outside.addEventListener("click", () => handleTimelineTaskClick(task));
+      bar.tabIndex = -1;
+      bar.setAttribute("aria-hidden", "true");
 
+      const outside = makeButton("", "timeline-outside-label", inspectHandler, { title: barTitle });
+      if (freshness.isFading) outside.style.opacity = String(freshness.opacity);
       const titleSpan = document.createElement("span");
       titleSpan.className = "timeline-outside-title";
       titleSpan.textContent = titleText;
-
       const metaSpan = document.createElement("span");
-      metaSpan.className = `timeline-outside-meta${isUndatedFocus ? " is-focus-undated" : ""}`;
-      if (!isUndatedFocus) {
-        metaSpan.style.color = style.badgeColor;
-      }
+      metaSpan.className = "timeline-outside-meta";
+      metaSpan.style.color = style.badgeColor;
       metaSpan.textContent = metaText;
-
       outside.appendChild(titleSpan);
       outside.appendChild(metaSpan);
       lane.appendChild(bar);
@@ -1565,12 +1531,11 @@ function renderTimeline() {
     } else {
       const titleSpan = document.createElement("span");
       titleSpan.className = "timeline-bar-label";
+      if (freshness.isFading) titleSpan.style.opacity = String(freshness.opacity);
       titleSpan.textContent = titleText;
-
       const metaSpan = document.createElement("span");
       metaSpan.className = "timeline-bar-meta";
       metaSpan.textContent = metaText;
-
       bar.appendChild(titleSpan);
       bar.appendChild(metaSpan);
       lane.appendChild(bar);
@@ -1578,38 +1543,89 @@ function renderTimeline() {
 
     lanesEl.appendChild(lane);
   });
+
+  renderTimelineInspector(allActive);
 }
 
-function startInlineTitleEdit(task, titleEl) {
-  if (!titleEl.isConnected) return;
+function buildStageEditor(task) {
+  const editor = document.createElement("div");
+  editor.className = "stage-editor";
+  const mode = editingStage.mode;
+
+  if (editingStage.prompt) {
+    const hint = document.createElement("div");
+    hint.className = "stage-editor-hint";
+    hint.textContent = editingStage.prompt;
+    editor.appendChild(hint);
+  }
+
+  const tabs = document.createElement("div");
+  tabs.className = "stage-editor-tabs";
   const input = document.createElement("input");
   input.type = "text";
-  input.className = "inline-title-input";
-  input.value = task.title;
-  input.setAttribute("aria-label", "Edit task title");
+  input.className = "stage-editor-input";
+  input.dataset.focusKey = "stage-input";
+  input.placeholder =
+    mode === "waiting" ? "Waiting on who / what? (e.g. Ana – legal)" : "Next physical step (where I left off)...";
+  input.value =
+    editingStage.draft !== undefined
+      ? editingStage.draft
+      : mode === "waiting"
+      ? task.waitingOn || ""
+      : task.nextStep || "";
 
-  let finished = false;
-  const restoreDisplay = () => {
-    if (input.isConnected) {
-      input.replaceWith(titleEl);
-    }
-  };
+  tabs.appendChild(
+    makeButton("◐ Started", `stage-chip${mode === "started" ? " active" : ""}`, () => {
+      editingStage = { id: task.id, mode: "started" };
+      pendingFocusTarget = { taskId: task.id, key: "stage-input" };
+      renderLists();
+    })
+  );
+  tabs.appendChild(
+    makeButton("◷ Waiting on", `stage-chip${mode === "waiting" ? " active" : ""}`, () => {
+      editingStage = { id: task.id, mode: "waiting" };
+      pendingFocusTarget = { taskId: task.id, key: "stage-input" };
+      renderLists();
+    })
+  );
+  tabs.appendChild(
+    makeButton("○ Reset to Todo", "stage-chip", () => {
+      editingStage = null;
+      updateTask(task.id, { stage: "todo", waitingOn: null });
+    })
+  );
+  tabs.appendChild(
+    makeButton(
+      task.area === "personal" ? "Personal" : "Work",
+      `stage-chip area-chip${task.area === "personal" ? " is-personal" : ""}`,
+      () => {
+        editingStage.draft = input.value;
+        updateTask(task.id, { area: task.area === "personal" ? "work" : "personal" });
+      },
+      { title: "Toggle Work / Personal" }
+    )
+  );
+  editor.appendChild(tabs);
 
-  const commit = () => {
-    if (finished) return;
-    finished = true;
-    const nextTitle = input.value.trim();
-    if (nextTitle && nextTitle !== task.title) {
-      updateTask(task.id, { title: nextTitle });
+  const row = document.createElement("div");
+  row.className = "stage-editor-row";
+
+  const commit = async () => {
+    const val = input.value.trim();
+    const continueChain = Boolean(editingStage?.endDayChain);
+    editingStage = null;
+    if (mode === "waiting") {
+      if (val) {
+        waitingExpanded = true;
+        savePrefs({ waitingExpanded: true });
+        await updateTask(task.id, { stage: "waiting", waitingOn: val, list: "later" });
+      } else {
+        await updateTask(task.id, { stage: "started", waitingOn: null });
+      }
     } else {
-      restoreDisplay();
+      await updateTask(task.id, { stage: "started", nextStep: val });
+      if (continueChain && val) runEndDayRitual(true);
     }
-  };
-
-  const cancel = () => {
-    if (finished) return;
-    finished = true;
-    restoreDisplay();
   };
 
   input.addEventListener("keydown", (e) => {
@@ -1617,70 +1633,252 @@ function startInlineTitleEdit(task, titleEl) {
       e.preventDefault();
       commit();
     } else if (e.key === "Escape") {
-      e.preventDefault();
-      e.stopPropagation();
-      cancel();
+      editingStage = null;
+      renderLists();
     }
   });
 
-  input.addEventListener("blur", () => {
-    scheduleBlurCommit(commit);
-  });
-
-  titleEl.replaceWith(input);
-  input.focus();
-  input.select();
+  row.appendChild(input);
+  row.appendChild(makeButton("Save", "banner-btn", commit));
+  row.appendChild(
+    makeButton("Cancel", "row-btn", () => {
+      editingStage = null;
+      renderLists();
+    })
+  );
+  editor.appendChild(row);
+  return editor;
 }
 
-function buildTaskDrawer(task) {
-  const drawer = document.createElement("div");
-  drawer.className = "task-drawer";
-
-  // Top row: editable title + recurrence selector
-  const topRow = document.createElement("div");
-  topRow.className = "drawer-top-row";
-
-  const titleInput = document.createElement("input");
-  titleInput.type = "text";
-  titleInput.className = "drawer-title-input";
-  titleInput.value = task.title;
-  titleInput.placeholder = "Task title";
-  titleInput.setAttribute("aria-label", "Task title");
-
-  let titleCancelled = false;
-  const commitDrawerTitle = () => {
-    if (titleCancelled) {
-      titleCancelled = false;
-      return;
-    }
-    const trimmed = titleInput.value.trim();
-    if (trimmed && trimmed !== task.title) {
-      updateTask(task.id, { title: trimmed });
+function renderSafeNotes(container, text) {
+  container.innerHTML = "";
+  tokenizeNotes(text).forEach((tok) => {
+    if (tok.type === "link") {
+      const a = document.createElement("a");
+      a.className = "notes-link";
+      a.href = tok.href;
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      a.textContent = tok.label;
+      container.appendChild(a);
     } else {
-      titleInput.value = task.title;
-    }
-  };
-
-  titleInput.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      titleInput.blur();
-    } else if (e.key === "Escape") {
-      e.preventDefault();
-      e.stopPropagation();
-      titleCancelled = true;
-      titleInput.value = task.title;
-      titleInput.blur();
+      container.appendChild(document.createTextNode(tok.value));
     }
   });
-  titleInput.addEventListener("blur", () => scheduleBlurCommit(commitDrawerTitle));
+}
 
-  const recWrap = document.createElement("label");
-  recWrap.className = "drawer-recurrence-wrap";
-  const recLabel = document.createElement("span");
+function toggleExpandTask(task) {
+  if (!task) return;
+  const hasDetail =
+    (task.subtasks && task.subtasks.length > 0) ||
+    Boolean(task.notes && task.notes.trim()) ||
+    Boolean(task.recurrence);
+  if (task.list === "done" && !hasDetail) return;
+  const nextId = expandedTaskId === task.id ? null : task.id;
+  if (nextId !== expandedTaskId) editingNotesId = null;
+  expandedTaskId = nextId;
+  renderLists();
+}
+
+function buildTaskDetail(task) {
+  const detail = document.createElement("div");
+  detail.className = "task-detail";
+
+  // 1. Flat Mini-Checklist (up to MAX_SUBTASKS = 7 steps)
+  const subs = Array.isArray(task.subtasks) ? task.subtasks : [];
+  const subLabel = document.createElement("div");
+  subLabel.className = "detail-label";
+  const doneCount = subs.filter((s) => s.done).length;
+  subLabel.textContent = subs.length > 0 ? `Steps (${doneCount}/${subs.length})` : "Steps";
+  detail.appendChild(subLabel);
+
+  if (subs.length > 0) {
+    const ul = document.createElement("ul");
+    ul.className = "subtask-list";
+    subs.forEach((sub) => {
+      const row = document.createElement("li");
+      row.className = `subtask-row${sub.done ? " is-done" : ""}`;
+
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.className = "task-checkbox";
+      cb.dataset.focusKey = `sub-${sub.id}`;
+      cb.checked = sub.done;
+      cb.disabled = task.list === "done";
+      cb.setAttribute("aria-label", `Step: ${sub.title}`);
+      cb.addEventListener("change", () => {
+        const nextDone = !sub.done;
+        const todayStr = toDateKey(new Date());
+        const nextSubs = subs.map((s) =>
+          s.id === sub.id ? { ...s, done: nextDone, completedAt: nextDone ? todayStr : null } : s
+        );
+        const patch = { subtasks: nextSubs };
+        if (nextDone && task.stage === "todo") patch.stage = "started";
+        updateTask(task.id, patch);
+      });
+
+      const title = document.createElement("span");
+      title.className = "subtask-title";
+      title.textContent = sub.title;
+
+      row.appendChild(cb);
+      row.appendChild(title);
+
+      if (task.list !== "done") {
+        row.appendChild(
+          makeButton("×", "row-btn del", () => {
+            updateTask(task.id, { subtasks: subs.filter((s) => s.id !== sub.id) });
+          }, { "aria-label": `Remove step "${sub.title}"`, "data-focus-key": `sub-del-${sub.id}` })
+        );
+      }
+      ul.appendChild(row);
+    });
+    detail.appendChild(ul);
+  }
+
+  if (task.list !== "done") {
+    if (subs.length < MAX_SUBTASKS) {
+      const addRow = document.createElement("div");
+      addRow.className = "subtask-add-row";
+      const subInput = document.createElement("input");
+      subInput.type = "text";
+      subInput.className = "stage-editor-input";
+      subInput.dataset.focusKey = "subtask-input";
+      subInput.placeholder = `Add step (${subs.length}/${MAX_SUBTASKS})...`;
+      subInput.value = stepDrafts.get(task.id) || "";
+      subInput.addEventListener("input", () => stepDrafts.set(task.id, subInput.value));
+
+      const addStep = () => {
+        const val = subInput.value.trim();
+        if (!val) return;
+        stepDrafts.delete(task.id);
+        const newSub = {
+          id: `s-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+          title: val,
+          done: false,
+          completedAt: null,
+        };
+        pendingFocusTarget = { taskId: task.id, key: "subtask-input" };
+        updateTask(task.id, { subtasks: [...subs, newSub] });
+      };
+
+      subInput.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          addStep();
+        }
+      });
+
+      addRow.appendChild(subInput);
+      addRow.appendChild(makeButton("Add", "banner-btn", addStep));
+      detail.appendChild(addRow);
+    } else {
+      const cap = document.createElement("span");
+      cap.className = "meta-mono";
+      cap.textContent = `Max ${MAX_SUBTASKS} steps reached.`;
+      detail.appendChild(cap);
+    }
+  }
+
+  // 2. Notes with safe clickable http(s) links (drafts preserved across tab switches/redraws)
+  const notesBlock = document.createElement("div");
+  notesBlock.className = "notes-block";
+
+  const notesHead = document.createElement("div");
+  notesHead.className = "notes-head";
+  const notesLabel = document.createElement("span");
+  notesLabel.className = "detail-label";
+  notesLabel.textContent = "Notes & links";
+  notesHead.appendChild(notesLabel);
+
+  if (task.list !== "done" && editingNotesId !== task.id) {
+    notesHead.appendChild(
+      makeButton(
+        task.notes ? "Edit" : "+ Add note",
+        "text-btn",
+        () => {
+          editingNotesId = task.id;
+          pendingFocusTarget = { taskId: task.id, key: "notes-input" };
+          renderLists();
+        },
+        { "data-focus-key": "notes-edit" }
+      )
+    );
+  }
+  notesBlock.appendChild(notesHead);
+
+  if (editingNotesId === task.id && task.list !== "done") {
+    const area = document.createElement("textarea");
+    area.className = "notes-textarea";
+    area.dataset.focusKey = "notes-input";
+    area.maxLength = MAX_NOTES_LENGTH;
+    area.placeholder = "Jot context or paste https:// links... (Ctrl+Enter to save)";
+    area.value = notesDrafts.has(task.id) ? notesDrafts.get(task.id) : task.notes || "";
+    area.addEventListener("input", () => notesDrafts.set(task.id, area.value));
+
+    let finished = false;
+    const commitNotes = () => {
+      if (finished || !area.isConnected) return;
+      finished = true;
+      const val = area.value.trim() ? area.value.trimEnd().slice(0, MAX_NOTES_LENGTH) : "";
+      notesDrafts.delete(task.id);
+      editingNotesId = null;
+      pendingFocusTarget = { taskId: task.id, key: "notes-edit" };
+      if (val !== (task.notes || "")) updateTask(task.id, { notes: val });
+      else renderLists();
+    };
+
+    area.addEventListener("keydown", (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+        e.preventDefault();
+        commitNotes();
+      } else if (e.key === "Escape") {
+        finished = true;
+        notesDrafts.delete(task.id);
+        editingNotesId = null;
+        pendingFocusTarget = { taskId: task.id, key: "notes-edit" };
+        renderLists();
+      }
+    });
+
+    const noteActions = document.createElement("div");
+    noteActions.className = "notes-actions";
+    noteActions.appendChild(makeButton("Save note", "banner-btn", commitNotes, { "data-focus-key": "notes-save" }));
+    noteActions.appendChild(
+      makeButton("Cancel", "row-btn", () => {
+        finished = true;
+        notesDrafts.delete(task.id);
+        editingNotesId = null;
+        pendingFocusTarget = { taskId: task.id, key: "notes-edit" };
+        renderLists();
+      })
+    );
+
+    notesBlock.appendChild(area);
+    notesBlock.appendChild(noteActions);
+  } else if (task.notes && task.notes.trim()) {
+    const view = document.createElement("div");
+    view.className = "notes-view";
+    renderSafeNotes(view, task.notes);
+    notesBlock.appendChild(view);
+  }
+
+  detail.appendChild(notesBlock);
+
+  // 3. Recurrence Schedule
+  const recRow = document.createElement("div");
+  recRow.className = "detail-recurrence-row";
+  const recLabel = document.createElement("label");
+  recLabel.className = "detail-label";
   recLabel.textContent = "Repeat";
+  const recSelectId = `rec-${task.id}`;
+  recLabel.setAttribute("for", recSelectId);
+
   const recSelect = document.createElement("select");
-  recSelect.className = "drawer-recurrence-select";
+  recSelect.id = recSelectId;
+  recSelect.className = "detail-recurrence-select";
+  recSelect.dataset.focusKey = "recurrence";
+  recSelect.disabled = task.list === "done";
   recSelect.setAttribute("aria-label", "Task recurrence");
 
   RECURRENCE_OPTIONS.forEach((opt) => {
@@ -1694,581 +1892,500 @@ function buildTaskDrawer(task) {
     updateTask(task.id, { recurrence: recSelect.value });
   });
 
-  recWrap.appendChild(recLabel);
-  recWrap.appendChild(recSelect);
-  topRow.appendChild(titleInput);
-  topRow.appendChild(recWrap);
-  drawer.appendChild(topRow);
+  recRow.appendChild(recLabel);
+  recRow.appendChild(recSelect);
+  detail.appendChild(recRow);
 
-  // Notes textarea (auto-grows with content) + safe external URL links
-  const notesInput = document.createElement("textarea");
-  notesInput.className = "drawer-notes-input";
-  notesInput.rows = 2;
-  notesInput.placeholder = "Notes or links (https://...)";
-  notesInput.value = task.notes || "";
-  notesInput.setAttribute("aria-label", "Task notes");
-
-  const autoSizeNotes = () => {
-    notesInput.style.height = "auto";
-    notesInput.style.height = `${Math.min(260, Math.max(48, notesInput.scrollHeight))}px`;
-  };
-  notesInput.addEventListener("input", autoSizeNotes);
-  requestAnimationFrame(autoSizeNotes);
-
-  notesInput.addEventListener("blur", () => {
-    scheduleBlurCommit(() => {
-      if (notesInput.value !== (task.notes || "")) {
-        updateTask(task.id, { notes: notesInput.value });
-      }
-    });
-  });
-
-  drawer.appendChild(notesInput);
-
-  const safeUrls = extractSafeUrls(task.notes || "");
-  if (safeUrls.length > 0) {
-    const linksRow = document.createElement("div");
-    linksRow.className = "drawer-links";
-    safeUrls.forEach(({ href, label }) => {
-      const a = document.createElement("a");
-      a.className = "note-link";
-      a.href = href;
-      a.target = "_blank";
-      a.rel = "noopener noreferrer";
-      a.textContent = `↗ ${label}`;
-      linksRow.appendChild(a);
-    });
-    drawer.appendChild(linksRow);
-  }
-
-  // Subtasks mini-checklist
-  const subtaskSection = document.createElement("div");
-  subtaskSection.className = "subtask-section";
-
-  const subtasks = Array.isArray(task.subtasks) ? task.subtasks : [];
-  if (subtasks.length > 0) {
-    const ul = document.createElement("ul");
-    ul.className = "subtask-list";
-
-    subtasks.forEach((st) => {
-      const item = document.createElement("li");
-      item.className = "subtask-item";
-
-      const cb = document.createElement("input");
-      cb.type = "checkbox";
-      cb.className = "subtask-checkbox";
-      cb.checked = Boolean(st.done);
-      cb.setAttribute("aria-label", `Subtask "${st.text}"`);
-      cb.addEventListener("change", () => {
-        const live = tasks.find((t) => t.id === task.id);
-        const currentSubtasks = live && Array.isArray(live.subtasks) ? live.subtasks : [];
-        const next = currentSubtasks.map((s) =>
-          s.id === st.id ? { ...s, done: cb.checked } : s
-        );
-        updateTask(task.id, { subtasks: next });
-      });
-
-      const txt = document.createElement("span");
-      txt.className = `subtask-text${st.done ? " is-done" : ""}`;
-      txt.textContent = st.text;
-
-      const del = document.createElement("button");
-      del.type = "button";
-      del.className = "subtask-del-btn";
-      del.textContent = "×";
-      del.setAttribute("aria-label", `Delete subtask "${st.text}"`);
-      del.addEventListener("click", () => {
-        const live = tasks.find((t) => t.id === task.id);
-        const currentSubtasks = live && Array.isArray(live.subtasks) ? live.subtasks : [];
-        const next = currentSubtasks.filter((s) => s.id !== st.id);
-        updateTask(task.id, { subtasks: next });
-      });
-
-      item.appendChild(cb);
-      item.appendChild(txt);
-      item.appendChild(del);
-      ul.appendChild(item);
-    });
-
-    subtaskSection.appendChild(ul);
-  }
-
-  const addRow = document.createElement("div");
-  addRow.className = "subtask-add-row";
-
-  const addInput = document.createElement("input");
-  addInput.type = "text";
-  addInput.className = "subtask-add-input";
-  addInput.placeholder = "Add subtask...";
-  addInput.dataset.subtaskInputFor = task.id;
-  addInput.setAttribute("aria-label", "New subtask");
-
-  const addBtn = document.createElement("button");
-  addBtn.type = "button";
-  addBtn.className = "row-btn subtask-add-btn";
-  addBtn.textContent = "Add";
-
-  const submitSubtask = () => {
-    const text = addInput.value.trim();
-    if (!text) return;
-    const live = tasks.find((t) => t.id === task.id);
-    const currentSubtasks = live && Array.isArray(live.subtasks) ? live.subtasks : [];
-    const next = [
-      ...currentSubtasks,
-      { id: makeId("st"), text, done: false },
-    ];
-    focusSubtaskInputTaskId = task.id;
-    updateTask(task.id, { subtasks: next });
-  };
-
-  addInput.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      submitSubtask();
-    }
-  });
-  addBtn.addEventListener("click", submitSubtask);
-
-  addRow.appendChild(addInput);
-  addRow.appendChild(addBtn);
-  subtaskSection.appendChild(addRow);
-
-  drawer.appendChild(subtaskSection);
-  return drawer;
+  return detail;
 }
 
 function buildTaskRow(task, context) {
-  const isExpanded = expandedTaskId === task.id;
+  const freshness = getTaskFreshness(task);
   const li = document.createElement("li");
-  li.className = `task-item${task.status === "done" ? " is-done" : ""}${
-    isExpanded ? " is-expanded" : ""
-  }`;
+  li.className = `task-item${task.list === "done" ? " is-done" : ""}${task.area === "personal" ? " is-personal" : ""}${freshness.isFading ? " is-fading" : ""}`;
+  if (freshness.isFading) li.style.setProperty("--ink-alpha", String(freshness.opacity));
   li.dataset.taskId = task.id;
 
-  const row = document.createElement("div");
-  row.className = "task-row";
+  const mainRow = document.createElement("div");
+  mainRow.className = "task-main-row";
 
   const checkbox = document.createElement("input");
   checkbox.type = "checkbox";
   checkbox.className = "task-checkbox";
-  checkbox.checked = task.status === "done";
-  checkbox.setAttribute(
-    "aria-label",
-    task.status === "done"
-      ? `Mark "${task.title}" as incomplete`
-      : `Mark "${task.title}" as done`
-  );
+  checkbox.dataset.focusKey = "check";
+  checkbox.checked = task.list === "done";
+  checkbox.setAttribute("aria-label", `Mark "${task.title}" as ${task.list === "done" ? "not done" : "done"}`);
   checkbox.addEventListener("change", () => toggleDone(task.id));
+  mainRow.appendChild(checkbox);
+
+  if (task.list !== "done") {
+    const glyph = task.stage === "started" ? "◐" : task.stage === "waiting" ? "◷" : "○";
+    const stageCls = `stage-btn${task.stage === "started" ? " is-started" : task.stage === "waiting" ? " is-waiting" : ""}`;
+    const stageTitle =
+      task.stage === "started"
+        ? "Started — click to edit next step or stage"
+        : task.stage === "waiting"
+        ? `Waiting on ${task.waitingOn || "..."} — click to update`
+        : "Mark as Started (◐) or Waiting (◷)";
+    mainRow.appendChild(
+      makeButton(
+        glyph,
+        stageCls,
+        () => {
+          if (editingStage && editingStage.id === task.id) {
+            editingStage = null;
+            renderLists();
+            return;
+          }
+          pendingFocusTarget = { taskId: task.id, key: "stage-input" };
+          if (task.stage === "todo") {
+            editingStage = { id: task.id, mode: "started" };
+            updateTask(task.id, { stage: "started" });
+          } else {
+            editingStage = { id: task.id, mode: task.stage === "waiting" ? "waiting" : "started" };
+            renderLists();
+          }
+        },
+        { title: stageTitle, "aria-label": stageTitle, "data-focus-key": "stage" }
+      )
+    );
+  }
 
   const body = document.createElement("div");
   body.className = "task-body";
+  const line = document.createElement("div");
+  line.className = "task-line";
 
-  const titleEl = document.createElement("span");
-  titleEl.className = "task-title";
-  titleEl.textContent = task.title;
-  titleEl.title = "Double-click to edit title";
-  titleEl.addEventListener("dblclick", () => startInlineTitleEdit(task, titleEl));
-  body.appendChild(titleEl);
+  if (editingTitleId === task.id) {
+    const titleInput = document.createElement("input");
+    titleInput.type = "text";
+    titleInput.className = "task-title-input";
+    titleInput.value = task.title;
+    titleInput.dataset.focusKey = "title-input";
+    let finished = false;
+    const commitTitle = () => {
+      if (finished || !titleInput.isConnected) return;
+      finished = true;
+      const val = titleInput.value.trim();
+      editingTitleId = null;
+      if (val && val !== task.title) updateTask(task.id, { title: val });
+      else renderLists();
+    };
+    titleInput.addEventListener("blur", commitTitle);
+    titleInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        commitTitle();
+      } else if (e.key === "Escape") {
+        finished = true;
+        editingTitleId = null;
+        renderLists();
+      }
+    });
+    line.appendChild(titleInput);
+  } else {
+    const titleEl = document.createElement("span");
+    titleEl.className = "task-title";
+    titleEl.textContent = task.title;
+    titleEl.title = "Double-click to rename";
+    titleEl.addEventListener("dblclick", () => {
+      if (task.list === "done") return;
+      editingTitleId = task.id;
+      pendingFocusTarget = { taskId: task.id, key: "title-input" };
+      renderLists();
+    });
+    line.appendChild(titleEl);
+  }
 
-  const toggleDrawer = () => {
-    expandedTaskId = expandedTaskId === task.id ? null : task.id;
-    renderTimeline();
-    renderLists();
-    const btn = document.querySelector(
-      `[data-task-id="${CSS.escape(task.id)}"] .expand-btn`
-    );
-    if (btn) btn.focus();
-  };
-
-  if (task.status === "done" && task.completedAt) {
+  if (task.list === "done" && task.completedAt) {
     const doneSpan = document.createElement("span");
     doneSpan.className = "done-date";
     doneSpan.textContent = formatShortDate(task.completedAt);
-    body.appendChild(doneSpan);
-  } else if (task.dueDate) {
-    const days = daysUntil(task.dueDate, new Date());
-    const style = getGradientStyle(days, horizonDays);
+    line.appendChild(doneSpan);
+  } else if (task.dueDate && parseDateKey(task.dueDate)) {
+    const days = daysUntil(task.dueDate);
+    const style = getGradientStyle(days, task.area, horizonDays);
     const tag = document.createElement("span");
     tag.className = "due-tag";
     tag.style.background = style.badgeBg;
     tag.style.color = style.badgeColor;
     tag.textContent = `${formatShortDate(task.dueDate)} · ${formatDaysLabel(days)}`;
-    body.appendChild(tag);
+    line.appendChild(tag);
   }
 
-  // Subtle metadata pills (recurrence, subtask counter, note indicator)
   if (task.recurrence) {
-    const recPill = document.createElement("button");
-    recPill.type = "button";
-    recPill.className = "meta-pill";
-    recPill.textContent = `↻ ${task.recurrence}`;
-    recPill.title = "Recurring task — click for details";
-    recPill.addEventListener("click", toggleDrawer);
-    body.appendChild(recPill);
+    line.appendChild(
+      makeButton(
+        `↻ ${task.recurrence}`,
+        "recurrence-pill",
+        () => toggleExpandTask(task),
+        { title: "Recurring task — click to view schedule" }
+      )
+    );
   }
 
+  // Collapsed row shows quiet plain-text subtask progress (e.g. 2/4), zero extra icons
   if (Array.isArray(task.subtasks) && task.subtasks.length > 0) {
-    const doneSubCount = task.subtasks.filter((s) => s.done).length;
-    const subPill = document.createElement("button");
-    subPill.type = "button";
-    subPill.className = `meta-pill${
-      doneSubCount === task.subtasks.length ? " is-complete" : ""
-    }`;
-    subPill.textContent = `${doneSubCount}/${task.subtasks.length}`;
-    subPill.title = "Subtasks — click to view checklist";
-    subPill.addEventListener("click", toggleDrawer);
-    body.appendChild(subPill);
+    const doneSub = task.subtasks.filter((s) => s.done).length;
+    line.appendChild(
+      makeButton(
+        `${doneSub}/${task.subtasks.length}`,
+        "subtask-count-btn",
+        () => toggleExpandTask(task),
+        { title: `${doneSub} of ${task.subtasks.length} steps done — click to expand` }
+      )
+    );
   }
 
-  if (task.notes && task.notes.trim()) {
-    const notePill = document.createElement("button");
-    notePill.type = "button";
-    notePill.className = "meta-pill";
-    notePill.textContent = "✎";
-    notePill.title = "Has notes — click to view";
-    notePill.addEventListener("click", toggleDrawer);
-    body.appendChild(notePill);
+  body.appendChild(line);
+
+  if (task.list !== "done" && task.stage === "waiting" && task.waitingOn) {
+    body.appendChild(
+      makeButton(
+        `Waiting on ${task.waitingOn}${task.nextStep ? ` · ${task.nextStep}` : ""}`,
+        "next-step-line is-waiting-line",
+        () => {
+          editingStage = { id: task.id, mode: "waiting" };
+          pendingFocusTarget = { taskId: task.id, key: "stage-input" };
+          renderLists();
+        }
+      )
+    );
+  } else if (task.list !== "done" && task.nextStep) {
+    body.appendChild(
+      makeButton(
+        `→ ${task.nextStep}`,
+        "next-step-line",
+        () => {
+          editingStage = { id: task.id, mode: "started" };
+          pendingFocusTarget = { taskId: task.id, key: "stage-input" };
+          renderLists();
+        },
+        { title: "Click to edit next step" }
+      )
+    );
   }
 
   const actions = document.createElement("div");
   actions.className = "task-actions";
 
-  const expandBtn = document.createElement("button");
-  expandBtn.type = "button";
-  expandBtn.className = `row-btn expand-btn${isExpanded ? " is-open" : ""}`;
-  expandBtn.textContent = isExpanded ? "▾" : "···";
-  expandBtn.title = isExpanded ? "Close details" : "Task details & subtasks";
-  expandBtn.setAttribute("aria-expanded", String(isExpanded));
-  expandBtn.addEventListener("click", toggleDrawer);
-  actions.appendChild(expandBtn);
-
-  if (task.status !== "done") {
+  if (task.list !== "done") {
     const dateInput = document.createElement("input");
     dateInput.type = "date";
-    dateInput.className = `inline-date-input${task.dueDate ? "" : " is-empty"}`;
+    dateInput.className = "inline-date-input";
+    dateInput.dataset.focusKey = "date";
     dateInput.value = task.dueDate || "";
     dateInput.title = "Change deadline";
-    dateInput.setAttribute("aria-label", `Deadline for "${task.title}"`);
-    let typingDate = false;
-    let dateCancelled = false;
+    dateInput.setAttribute("aria-label", `Deadline for ${task.title}`);
+    let dateCommitted = false;
     const commitDate = () => {
-      if (dateCancelled) {
-        dateCancelled = false;
-        return;
-      }
+      if (dateCommitted || !dateInput.isConnected) return;
       const nextVal = dateInput.value || "";
       if (nextVal !== (task.dueDate || "")) {
+        dateCommitted = true;
         updateTask(task.id, { dueDate: nextVal });
       }
     };
+    dateInput.addEventListener("blur", commitDate);
     dateInput.addEventListener("keydown", (e) => {
       if (e.key === "Enter") {
         e.preventDefault();
-        typingDate = false;
         commitDate();
       } else if (e.key === "Escape") {
-        e.preventDefault();
-        e.stopPropagation();
-        typingDate = false;
-        dateCancelled = true;
+        dateCommitted = true;
         dateInput.value = task.dueDate || "";
         dateInput.blur();
-      } else if (/^\d$/.test(e.key) || e.key === "Backspace" || e.key === "Delete") {
-        typingDate = true;
       }
-    });
-    dateInput.addEventListener("change", () => {
-      if (!typingDate) commitDate();
-    });
-    dateInput.addEventListener("blur", () => {
-      typingDate = false;
-      scheduleBlurCommit(commitDate);
     });
     actions.appendChild(dateInput);
 
-    const moveBtn = document.createElement("button");
-    moveBtn.type = "button";
-    moveBtn.className = "row-btn";
-    moveBtn.textContent = context === "inbox" ? "→ Today" : "Later";
-    moveBtn.addEventListener("click", () =>
-      updateTask(task.id, { status: context === "inbox" ? "today" : "inbox" })
-    );
-    actions.appendChild(moveBtn);
+    if (task.stage !== "waiting") {
+      actions.appendChild(
+        makeButton(
+          context === "today" ? "Later" : "→ Today",
+          "row-btn",
+          () => updateTask(task.id, { list: context === "today" ? "later" : "today" }),
+          { "data-focus-key": "move" }
+        )
+      );
+    }
   }
 
-  const delBtn = document.createElement("button");
-  delBtn.type = "button";
-  delBtn.className = "row-btn del";
-  delBtn.textContent = "×";
-  delBtn.setAttribute("aria-label", `Delete "${task.title}"`);
-  delBtn.addEventListener("click", () => deleteTask(task.id));
-  actions.appendChild(delBtn);
+  const isExpanded = expandedTaskId === task.id;
+  const hasDetailContent =
+    (task.subtasks && task.subtasks.length > 0) ||
+    Boolean(task.notes && task.notes.trim()) ||
+    Boolean(task.recurrence);
+  if (task.list !== "done" || hasDetailContent) {
+    actions.appendChild(
+      makeButton(
+        isExpanded ? "▾" : "▸",
+        "row-btn",
+        () => toggleExpandTask(task),
+        {
+          title: "Steps & notes (E)",
+          "aria-label": `${isExpanded ? "Collapse" : "Expand"} steps and notes for "${task.title}"`,
+          "aria-expanded": String(isExpanded),
+          "data-focus-key": "detail",
+        }
+      )
+    );
+  }
 
-  row.appendChild(checkbox);
-  row.appendChild(body);
-  row.appendChild(actions);
-  li.appendChild(row);
+  actions.appendChild(
+    makeButton("×", "row-btn del", () => deleteTask(task.id), {
+      "aria-label": `Delete "${task.title}"`,
+      "data-focus-key": "del",
+    })
+  );
+
+  mainRow.appendChild(body);
+  mainRow.appendChild(actions);
+  li.appendChild(mainRow);
+
+  // Quiet inline stale check (14+ days untouched) — no badge clutter on row
+  if (freshness.isStale && !(editingStage && editingStage.id === task.id)) {
+    const staleBar = document.createElement("div");
+    staleBar.className = "stale-bar";
+    const age = document.createElement("span");
+    age.textContent = `Untouched ${freshness.daysUntouched}d:`;
+    staleBar.appendChild(age);
+    appendFreshnessButtons(staleBar, task, { keepCls: "stale-btn", btnCls: "stale-btn", dropCls: "stale-btn is-drop" });
+    li.appendChild(staleBar);
+  }
+
+  if (editingStage && editingStage.id === task.id && task.list !== "done") {
+    li.appendChild(buildStageEditor(task));
+  }
 
   if (isExpanded) {
-    li.appendChild(buildTaskDrawer(task));
+    li.appendChild(buildTaskDetail(task));
   }
 
   return li;
 }
 
+function renderSwapPrompt(todayTasks) {
+  const el = document.getElementById("today-swap-prompt");
+  if (!pendingSwap || todayTasks.length < TODAY_CAP) {
+    pendingSwap = null;
+    el.classList.add("hidden");
+    return;
+  }
+  el.innerHTML = "";
+  const label = document.createElement("span");
+  label.className = "swap-prompt-label";
+  label.textContent = `Today is full (${todayTasks.length}/${TODAY_CAP}). Swap out:`;
+  el.appendChild(label);
+
+  todayTasks.forEach((t) => {
+    const shortTitle = t.title.length > 26 ? `${t.title.slice(0, 24)}…` : t.title;
+    el.appendChild(makeButton(shortTitle, "banner-btn", () => executeSwap(t.id)));
+  });
+
+  el.appendChild(
+    makeButton(pendingSwap.kind === "add" ? "Add to Later" : "Cancel", "row-btn", () => {
+      const info = pendingSwap;
+      pendingSwap = null;
+      if (info.kind === "add") addTask(info.title, info.dueDate, false, false, info.area || "work");
+      else renderLists();
+    })
+  );
+
+  el.appendChild(
+    makeButton("Add anyway", "row-btn", () => {
+      const info = pendingSwap;
+      pendingSwap = null;
+      if (info.kind === "add") addTask(info.title, info.dueDate, true, true, info.area || "work");
+      else updateTask(info.taskId, { list: "today" }, { forceToday: true });
+    })
+  );
+
+  el.classList.remove("hidden");
+}
+
 function renderLists() {
-  const now = new Date();
-  const filtered = isFilterActive();
+  const focusedEl = document.activeElement;
+  const focusedTaskId = focusedEl?.closest?.("[data-task-id]")?.dataset?.taskId || null;
+  const focusedKey = focusedEl?.dataset?.focusKey || null;
 
-  const allTodayTasks = tasks.filter((t) => t.status === "today");
-  const todayTasks = sortTasksByUrgency(
-    allTodayTasks.filter(taskMatchesFilters),
-    now
-  );
+  const allActive = activeTasks();
+  const visibleActive = allActive.filter(matchesSearch);
+  const todayTasks = sortTasksByUrgency(visibleActive.filter((t) => t.list === "today"));
+  const waitingTasks = sortTasksByUrgency(visibleActive.filter((t) => t.list === "later" && t.stage === "waiting"));
+  const allLaterTasks = sortTasksByUrgency(visibleActive.filter((t) => t.list === "later" && t.stage !== "waiting"));
+  const doneTasks = visibleActive
+    .filter((t) => t.list === "done")
+    .sort((a, b) => (b.completedAt || "").localeCompare(a.completedAt || ""));
 
-  const allInboxTasks = sortTasksByUrgency(
-    tasks.filter((t) => t.status === "inbox" && taskMatchesFilters(t)),
-    now
-  );
-
-  const allDoneUnfiltered = tasks.filter((t) => t.status === "done");
-  const doneTasks = allDoneUnfiltered
-    .filter(taskMatchesFilters)
-    .sort(
-      (a, b) =>
-        (b.completedAt || "").localeCompare(a.completedAt || "") ||
-        (b.updatedAt || 0) - (a.updatedAt || 0)
-    );
-
-  const visibleInbox = allInboxTasks.filter((t) => {
-    if (inboxFilter === "dated") return Boolean(t.dueDate);
-    if (inboxFilter === "flexible") return !t.dueDate;
+  const visibleLater = allLaterTasks.filter((t) => {
+    if (laterFilter === "dated") return Boolean(parseDateKey(t.dueDate));
+    if (laterFilter === "flexible") return !parseDateKey(t.dueDate);
     return true;
   });
 
   // Today
+  const allToday = todayActiveList();
+  renderSwapPrompt(allToday);
   const todayListEl = document.getElementById("today-list");
-  const todayEmptyEl = document.getElementById("today-empty");
-  todayListEl.replaceChildren();
+  todayListEl.innerHTML = "";
   todayTasks.forEach((t) => todayListEl.appendChild(buildTaskRow(t, "today")));
-  document.getElementById("today-count").textContent = String(todayTasks.length);
-  todayEmptyEl.textContent = filtered
-    ? "No matching tasks in Today."
-    : "Nothing set for today.";
+  document.getElementById("today-count").textContent = `${allToday.length}/${TODAY_CAP}`;
+  const todayEmptyEl = document.getElementById("today-empty");
   todayEmptyEl.classList.toggle("hidden", todayTasks.length > 0);
+  todayEmptyEl.textContent = (searchQuery || activeTag) && allToday.length > 0 ? "No matching tasks in Today." : "Nothing set for today.";
+  document.getElementById("end-day-btn").classList.toggle(
+    "hidden",
+    !allActive.some((t) => t.list !== "done" && t.stage === "started")
+  );
 
   const nudge = document.getElementById("focus-nudge");
-  if (allTodayTasks.length > 3) {
-    nudge.textContent = `${allTodayTasks.length} in focus — trim to 3?`;
+  if (allToday.length > TODAY_CAP) {
+    nudge.textContent = `${allToday.length} in focus — trim to ${TODAY_CAP}?`;
     nudge.classList.add("is-heavy");
   } else {
-    nudge.textContent = "1–3 focus items";
+    nudge.textContent = `1–${TODAY_CAP} focus items`;
     nudge.classList.remove("is-heavy");
   }
 
-  // Inbox
-  const inboxListEl = document.getElementById("inbox-list");
-  const inboxEmptyEl = document.getElementById("inbox-empty");
-  inboxListEl.replaceChildren();
-  visibleInbox.forEach((t) => inboxListEl.appendChild(buildTaskRow(t, "inbox")));
-  document.getElementById("inbox-count").textContent = String(allInboxTasks.length);
-  inboxEmptyEl.textContent = filtered
-    ? "No matching tasks in Inbox."
-    : "Inbox clear.";
-  inboxEmptyEl.classList.toggle("hidden", visibleInbox.length > 0);
+  // Later
+  const laterListEl = document.getElementById("later-list");
+  laterListEl.innerHTML = "";
+  visibleLater.forEach((t) => laterListEl.appendChild(buildTaskRow(t, "later")));
+  document.getElementById("later-count").textContent =
+    laterFilter === "all" ? String(allLaterTasks.length) : `${visibleLater.length}/${allLaterTasks.length}`;
+
+  const laterEmptyEl = document.getElementById("later-empty");
+  laterEmptyEl.classList.toggle("hidden", visibleLater.length > 0);
+  if (visibleLater.length === 0) {
+    laterEmptyEl.textContent =
+      laterFilter === "dated"
+        ? "No dated tasks in Later."
+        : laterFilter === "flexible"
+        ? "No undated tasks in Later."
+        : "Nothing waiting in Later.";
+  }
+
+  // Waiting On (tucked inside Later)
+  const waitSection = document.getElementById("waiting-section");
+  const waitListEl = document.getElementById("waiting-list");
+  const waitToggle = document.getElementById("waiting-toggle");
+  waitSection.classList.toggle("hidden", waitingTasks.length === 0);
+  document.getElementById("waiting-toggle-label").textContent = `◷ Waiting on (${waitingTasks.length})`;
+  document.getElementById("waiting-chevron").textContent = waitingExpanded ? "▾" : "▸";
+  waitToggle.setAttribute("aria-expanded", String(waitingExpanded));
+  waitListEl.classList.toggle("hidden", !waitingExpanded);
+  waitListEl.innerHTML = "";
+  if (waitingExpanded) waitingTasks.forEach((t) => waitListEl.appendChild(buildTaskRow(t, "later")));
 
   // Done
   const doneListEl = document.getElementById("done-list");
-  const doneEmptyEl = document.getElementById("done-empty");
-  const doneFootEl = document.getElementById("done-foot");
-  const doneMoreBtn = document.getElementById("done-more-btn");
+  doneListEl.innerHTML = "";
+  (showAllDone ? doneTasks : doneTasks.slice(0, 12)).forEach((t) => doneListEl.appendChild(buildTaskRow(t, "done")));
 
-  doneListEl.replaceChildren();
-  const visibleDone = showAllDone ? doneTasks : doneTasks.slice(0, 12);
-  visibleDone.forEach((t) => doneListEl.appendChild(buildTaskRow(t, "done")));
-
+  const moreBtn = document.getElementById("done-more-btn");
   if (doneTasks.length > 12) {
-    doneFootEl.classList.remove("hidden");
-    doneMoreBtn.textContent = showAllDone
-      ? "Show less"
-      : `Show all (${doneTasks.length})`;
+    moreBtn.classList.remove("hidden");
+    moreBtn.textContent = showAllDone ? "Show fewer" : `Show ${doneTasks.length - 12} more completed`;
   } else {
-    doneFootEl.classList.add("hidden");
+    moreBtn.classList.add("hidden");
   }
 
-  const weeklyWins = countCompletedThisWeek(tasks, now);
-  document.getElementById("wins-week-badge").textContent = `${weeklyWins} this week`;
-  doneEmptyEl.textContent = filtered
-    ? "No matching completed tasks."
-    : "Completed tasks appear here.";
-  doneEmptyEl.classList.toggle("hidden", doneTasks.length > 0);
-  document
-    .getElementById("clear-done-btn")
-    .classList.toggle("hidden", allDoneUnfiltered.length === 0);
+  const momentum = getWeeklyMomentum(allActive);
+  document.getElementById("wins-week-badge").textContent =
+    momentum.stepsDone > 0
+      ? `${momentum.tasksDone} done · ${momentum.stepsDone} step${momentum.stepsDone === 1 ? "" : "s"} this week`
+      : `${momentum.tasksDone} this week`;
+  document.getElementById("done-empty").classList.toggle("hidden", doneTasks.length > 0);
+  document.getElementById("clear-done-btn").classList.toggle("hidden", doneTasks.length === 0);
 
-  if (focusSubtaskInputTaskId) {
-    const targetInput = document.querySelector(
-      `[data-subtask-input-for="${CSS.escape(focusSubtaskInputTaskId)}"]`
+  // Focus one exact requested control (never steals focus from other rows), else restore prior control
+  const requested = pendingFocusTarget;
+  pendingFocusTarget = null;
+  if (requested) {
+    const target = document.querySelector(
+      `[data-task-id="${CSS.escape(requested.taskId)}"] [data-focus-key="${CSS.escape(requested.key)}"]`
     );
-    focusSubtaskInputTaskId = null;
-    if (targetInput) targetInput.focus();
+    if (target) {
+      target.focus();
+      if (requested.key === "title-input" && typeof target.select === "function") target.select();
+    }
+  } else if (focusedTaskId && focusedKey) {
+    const target = document.querySelector(
+      `[data-task-id="${CSS.escape(focusedTaskId)}"] [data-focus-key="${CSS.escape(focusedKey)}"]`
+    );
+    if (target) target.focus();
   }
 }
 
 function renderAll() {
-  lastRenderedDateKey = toDateKey(new Date());
+  const todayKey = toDateKey(new Date());
+  if (todayKey !== lastRenderedDateKey && checkinMode === "hidden") {
+    checkinMode = "auto";
+  }
+  lastRenderedDateKey = todayKey;
   renderHeader();
-  renderFilterBar();
+  renderCheckin();
+  renderTagBar();
   renderTimeline();
   renderLists();
 }
 
-// --- Export / Safe Import ---
+// ============================================================================
+// 6. Export / Import (Merge by Default)
+// ============================================================================
 
 function exportJson() {
-  const blob = new Blob([JSON.stringify(tasks, null, 2)], { type: "application/json" });
+  const doc = serializeTaskDocument(tasks, DEVICE_ID);
+  const blob = new Blob([JSON.stringify(doc, null, 2) + "\n"], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
   a.download = `horizon-tasks-${toDateKey(new Date())}.json`;
   a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  URL.revokeObjectURL(url);
+  savePrefs({ lastExportAt: Date.now() });
+  if (!undoEntry?.delta) showToast("Exported tasks.json — move into OneDrive to sync.");
 }
 
-function showImportBanner(parsedTasks, filename) {
-  pendingImport = {
-    tasks: normalizeTaskList(parsedTasks),
-    filename: filename || "tasks.json",
-  };
-  const count = pendingImport.tasks.length;
-  document.getElementById("import-banner-text").textContent =
-    `Import ${count} task${count === 1 ? "" : "s"} from "${pendingImport.filename}"?`;
-  document.getElementById("import-banner").classList.remove("hidden");
-}
-
-function hideImportBanner() {
-  pendingImport = null;
-  document.getElementById("import-banner").classList.add("hidden");
-}
-
-async function applyPendingImport(mode, { force = false } = {}) {
-  return enqueueMutation(async () => {
-    if (!pendingImport) return { ok: false };
-    const incoming = pendingImport.tasks;
-    const count = incoming.length;
-    const snapshot = cloneTasks(tasks);
-    const label =
-      mode === "merge"
-        ? `Merged ${count} imported task${count === 1 ? "" : "s"}`
-        : `Replaced with ${count} imported task${count === 1 ? "" : "s"}`;
-
-    if (useServerApi) {
-      const res = await serverMutate("/api/tasks/import", {
-        method: "POST",
-        body: { tasks: incoming, mode },
-        force,
-        actionName: "import tasks",
-      });
-      if (!res.ok) {
-        if (res.conflict) {
-          showConflictBanner("server", "tasks.json", () =>
-            applyPendingImport(mode, { force: true })
-          );
-        }
-        return res;
-      }
-      pushUndoSnapshot(snapshot, label);
-    } else {
-      pushUndoSnapshot(snapshot, label);
-      if (mode === "merge") {
-        tasks = mergeTaskLists(tasks, incoming);
-      } else {
-        tasks = normalizeTaskList(incoming);
-      }
-      localStorage.setItem(SAMPLE_FLAG_KEY, "1");
-      await persistOffline();
-    }
-    hideImportBanner();
-    renderAll();
-    showToast(label, { showUndo: true });
-    return { ok: true };
-  });
-}
-
-function stageImportJson(file) {
+function importJson(file) {
   if (!file) return;
   const reader = new FileReader();
-  reader.onload = () => {
+  reader.onload = async () => {
     try {
-      const parsed = JSON.parse(String(reader.result));
-      const list = Array.isArray(parsed)
-        ? parsed
-        : parsed && Array.isArray(parsed.tasks)
-          ? parsed.tasks
-          : null;
-      if (!list) throw new Error("Expected a JSON list");
-      showImportBanner(list, file.name);
+      const parsed = parseTaskDocument(JSON.parse(String(reader.result)));
+      const beforeById = new Map(tasks.map((t) => [t.id, cloneTask(t)]));
+      const merged = mergeTaskLists(tasks, parsed.tasks);
+
+      // Track only tasks actually added or modified by this import for safe targeted Undo
+      const delta = new Map();
+      merged.forEach((t) => {
+        const prev = beforeById.get(t.id) || null;
+        if (!prev || prev.updatedAt !== t.updatedAt) delta.set(t.id, prev);
+      });
+
+      tasks = merged;
+      safeLocalSet(SAMPLE_FLAG_KEY, "1");
+      await persistState();
+      // Data just came from a file, so don't immediately nag to export it back
+      savePrefs({ lastExportAt: Date.now() });
+      renderAll();
+      showToast(
+        `Merged ${parsed.tasks.length} task${parsed.tasks.length === 1 ? "" : "s"} from ${file.name}`,
+        delta.size > 0 ? delta : null
+      );
     } catch {
-      alert("That file doesn't look like a valid tasks.json list.");
+      showBanner("That file doesn't look like a valid Horizon tasks.json file.", [{ label: "Dismiss", onClick: hideBanner }], true);
     }
   };
   reader.readAsText(file);
 }
 
-// --- Quick-Date Pills & Rollover Helpers ---
-
-function computeQuickDateValue(kind) {
-  const now = new Date();
-  const todayKey = toDateKey(now);
-  if (kind === "tom") return addDaysToKey(todayKey, 1);
-  if (kind === "1w") return addDaysToKey(todayKey, 7);
-  if (kind === "1m") return getNextRecurrenceDate(todayKey, "monthly", now);
-  return "";
-}
-
-function syncQuickDatePills() {
-  const currentVal = document.getElementById("task-date-input").value;
-  document.querySelectorAll(".quick-pill").forEach((pill) => {
-    const targetVal = computeQuickDateValue(pill.dataset.quickDate);
-    const active = Boolean(currentVal && currentVal === targetVal);
-    pill.classList.toggle("is-active", active);
-    pill.setAttribute("aria-pressed", String(active));
-  });
-}
-
-function checkDateRollover() {
-  const nowKey = toDateKey(new Date());
-  if (nowKey !== lastRenderedDateKey) {
-    lastRenderedDateKey = nowKey;
-    syncQuickDatePills();
-    renderAll();
-  }
-}
-
-function isTypingContext(el) {
-  if (!el) return false;
-  if (el.isContentEditable) return true;
-  const tag = el.tagName;
-  if (tag === "TEXTAREA" || tag === "SELECT") return true;
-  if (tag === "INPUT") {
-    const type = (el.type || "text").toLowerCase();
-    return type !== "checkbox" && type !== "radio" && type !== "button" && type !== "submit";
-  }
-  return false;
-}
-
-// --- Init ---
+// ============================================================================
+// 7. Lifecycle, Midnight Refresh & Event Wiring
+// ============================================================================
 
 async function init() {
-  document.addEventListener("pointerdown", () => {
-    isPointerDown = true;
-  });
-  const clearPointer = () => {
-    isPointerDown = false;
-  };
-  document.addEventListener("pointerup", clearPointer);
-  document.addEventListener("pointercancel", clearPointer);
-
   await loadInitialTasks();
   renderAll();
 
@@ -2276,45 +2393,85 @@ async function init() {
   const titleInput = document.getElementById("task-title-input");
   const dateInput = document.getElementById("task-date-input");
   const todayInput = document.getElementById("task-today-input");
+  const areaBtn = document.getElementById("capture-area-btn");
+  const searchBar = document.getElementById("search-bar");
   const searchInput = document.getElementById("search-input");
 
-  form.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const res = await addTask(titleInput.value, dateInput.value, todayInput.checked);
-    if (res && res.ok) {
-      titleInput.value = "";
-      dateInput.value = "";
-      todayInput.checked = false;
-      syncQuickDatePills();
-      titleInput.focus();
+  const resolveQuickDate = (kind) => {
+    const now = new Date();
+    if (kind === "tomorrow") return addDaysKey(now, 1);
+    if (kind === "+1w") return addDaysKey(now, 7);
+    if (kind === "next-mon") return getNextWeekdayKey(1, now);
+    if (kind === "+1m") {
+      return toDateKey(addMonthsClamped(now.getFullYear(), now.getMonth(), now.getDate(), 1));
     }
-  });
+    return "";
+  };
 
-  document.querySelectorAll(".quick-pill").forEach((pill) => {
-    pill.addEventListener("click", () => {
-      const targetVal = computeQuickDateValue(pill.dataset.quickDate);
-      dateInput.value = dateInput.value === targetVal ? "" : targetVal;
-      syncQuickDatePills();
+  const syncChipHighlights = () => {
+    document.querySelectorAll("[data-quick-date]").forEach((btn) => {
+      const target = resolveQuickDate(btn.dataset.quickDate);
+      btn.classList.toggle("is-active", Boolean(dateInput.value) && dateInput.value === target);
+    });
+    areaBtn.textContent = captureArea === "personal" ? "Personal" : "Work";
+    areaBtn.classList.toggle("is-personal", captureArea === "personal");
+  };
+
+  document.querySelectorAll("[data-quick-date]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const target = resolveQuickDate(btn.dataset.quickDate);
+      dateInput.value = dateInput.value === target ? "" : target;
+      syncChipHighlights();
       titleInput.focus();
     });
   });
-  dateInput.addEventListener("change", syncQuickDatePills);
 
-  // Search & Filter Bar
+  dateInput.addEventListener("change", syncChipHighlights);
+
+  areaBtn.addEventListener("click", () => {
+    captureArea = captureArea === "work" ? "personal" : "work";
+    savePrefs({ captureArea });
+    syncChipHighlights();
+    titleInput.focus();
+  });
+  syncChipHighlights();
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const parsed = parseQuickCapture(titleInput.value);
+    const finalTitle = parsed.title;
+    if (!finalTitle) return;
+    const finalDue = dateInput.value || parsed.dueDate || "";
+    const finalToday = todayInput.checked || parsed.list === "today";
+    const finalArea = parsed.area || captureArea;
+
+    await addTask(finalTitle, finalDue, finalToday, false, finalArea);
+    titleInput.value = "";
+    dateInput.value = "";
+    todayInput.checked = false;
+    syncChipHighlights();
+    titleInput.focus();
+  });
+
+  document.getElementById("checkin-open-btn").addEventListener("click", startCheckinCards);
+  document.getElementById("end-day-btn").addEventListener("click", () => runEndDayRitual(false));
+
+  const closeSearch = () => {
+    searchQuery = "";
+    searchInput.value = "";
+    searchBar.classList.add("hidden");
+    renderAll();
+  };
   searchInput.addEventListener("input", () => {
-    searchQuery = searchInput.value;
-    renderFilterBar();
+    searchQuery = searchInput.value.trim();
     renderTimeline();
     renderLists();
   });
-  document.getElementById("search-clear-btn").addEventListener("click", () => {
-    searchQuery = "";
-    searchInput.value = "";
-    renderAll();
-    searchInput.focus();
+  searchInput.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closeSearch();
   });
-  document.getElementById("clear-filters-btn").addEventListener("click", () => {
-    searchQuery = "";
+  document.getElementById("search-clear-btn").addEventListener("click", closeSearch);
+  document.getElementById("clear-tag-btn").addEventListener("click", () => {
     activeTag = null;
     renderAll();
   });
@@ -2366,8 +2523,7 @@ async function init() {
     e.preventDefault();
   });
   horizonPresetToggle.addEventListener("click", () => {
-    const nextOpen = !isHorizonMenuOpen();
-    setHorizonMenuOpen(nextOpen);
+    setHorizonMenuOpen(!isHorizonMenuOpen());
   });
 
   horizonPresetOptions.forEach((opt, idx) => {
@@ -2407,127 +2563,125 @@ async function init() {
     }
   });
 
-  // Timeline & Done "Show all (N) / Show less" toggles
   document.getElementById("timeline-more-btn").addEventListener("click", () => {
     showAllTimeline = !showAllTimeline;
     renderTimeline();
   });
+
+  document.getElementById("storage-tag").addEventListener("click", () => {
+    if (syncState === "error") {
+      if (useServerApi) loadFromServer({ merge: hasLoadedServer }).then((ok) => ok && renderAll());
+      else writeLinkedFileQueued();
+    } else if (!useServerApi && !linkedFileHandle) {
+      exportJson();
+    }
+  });
+
+  document.getElementById("reconnect-file-btn").addEventListener("click", reconnectSavedFile);
+  document.getElementById("link-file-btn").addEventListener("click", () => pickAndLinkFile("open"));
+  document.getElementById("new-file-btn").addEventListener("click", () => pickAndLinkFile("save"));
+  document.getElementById("clear-samples-btn").addEventListener("click", clearSamples);
+  document.getElementById("clear-done-btn").addEventListener("click", clearCompleted);
+  document.getElementById("export-btn").addEventListener("click", exportJson);
+
+  const importInput = document.getElementById("import-input");
+  document.getElementById("import-btn").addEventListener("click", () => importInput.click());
+  importInput.addEventListener("change", (e) => {
+    importJson(e.target.files[0]);
+    e.target.value = "";
+  });
+
+  document.getElementById("waiting-toggle").addEventListener("click", () => {
+    waitingExpanded = !waitingExpanded;
+    savePrefs({ waitingExpanded });
+    renderLists();
+  });
+
   document.getElementById("done-more-btn").addEventListener("click", () => {
     showAllDone = !showAllDone;
     renderLists();
   });
 
-  // Storage, Conflict, Import & Toast Controls
-  document.getElementById("link-file-btn").addEventListener("click", linkExistingFile);
-  document.getElementById("new-file-btn").addEventListener("click", createLinkedFile);
-  document.getElementById("reconnect-file-btn").addEventListener("click", reconnectSavedFile);
-  document.getElementById("clear-samples-btn").addEventListener("click", clearSamples);
-  document.getElementById("clear-done-btn").addEventListener("click", clearCompleted);
-  document.getElementById("export-btn").addEventListener("click", exportJson);
-  document.getElementById("import-input").addEventListener("change", (e) => {
-    stageImportJson(e.target.files[0]);
-    e.target.value = "";
+  document.getElementById("toast-undo-btn").addEventListener("click", performUndo);
+  document.getElementById("toast-close-btn").addEventListener("click", () => {
+    document.getElementById("toast").classList.add("hidden");
   });
 
-  document.getElementById("import-merge-btn").addEventListener("click", () =>
-    applyPendingImport("merge")
-  );
-  document.getElementById("import-replace-btn").addEventListener("click", () =>
-    applyPendingImport("replace")
-  );
-  document.getElementById("import-cancel-btn").addEventListener("click", hideImportBanner);
-
-  document
-    .getElementById("conflict-reload-btn")
-    .addEventListener("click", reloadFromExternalSource);
-  document
-    .getElementById("conflict-overwrite-btn")
-    .addEventListener("click", overwriteExternalWithMine);
-
-  document.getElementById("toast-undo-btn").addEventListener("click", performUndo);
-  document.getElementById("toast-dismiss-btn").addEventListener("click", hideToast);
-
-  // Inbox segmented filter
   document.querySelectorAll(".filter-btn").forEach((btn) => {
-    btn.setAttribute("aria-pressed", String(btn.classList.contains("active")));
+    btn.classList.toggle("active", btn.dataset.filter === laterFilter);
     btn.addEventListener("click", () => {
-      inboxFilter = btn.dataset.filter;
-      document.querySelectorAll(".filter-btn").forEach((b) => {
-        const isActive = b === btn;
-        b.classList.toggle("active", isActive);
-        b.setAttribute("aria-pressed", String(isActive));
-      });
+      laterFilter = btn.dataset.filter;
+      savePrefs({ laterFilter });
+      document.querySelectorAll(".filter-btn").forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
       renderLists();
     });
   });
 
-  // Global Keyboard Shortcuts
   document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && isHorizonMenuOpen()) {
+      setHorizonMenuOpen(false);
+      return;
+    }
+
     const activeEl = document.activeElement;
-
-    if (e.key === "Escape") {
-      if (isHorizonMenuOpen()) {
-        setHorizonMenuOpen(false);
-        return;
-      }
-      if (
-        activeEl &&
-        (activeEl.tagName === "INPUT" ||
-          activeEl.tagName === "TEXTAREA" ||
-          activeEl.tagName === "SELECT")
-      ) {
-        activeEl.blur();
-        return;
-      }
-      if (pendingImport) {
-        hideImportBanner();
-        return;
-      }
-      if (expandedTaskId !== null) {
-        expandedTaskId = null;
-        renderTimeline();
-        renderLists();
-      }
+    const tag = activeEl?.tagName;
+    const inTextInput =
+      tag === "TEXTAREA" ||
+      tag === "SELECT" ||
+      (tag === "INPUT" && !["checkbox", "radio", "button", "submit"].includes(activeEl.type));
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z" && !inTextInput && undoEntry?.delta) {
+      e.preventDefault();
+      performUndo();
       return;
     }
+    if (inTextInput || e.ctrlKey || e.metaKey || e.altKey) return;
 
-    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "z") {
-      if (!isTypingContext(activeEl)) {
-        e.preventDefault();
-        performUndo();
+    const key = e.key.toLowerCase();
+    if (key === "n") {
+      e.preventDefault();
+      titleInput.focus();
+    } else if (e.key === "/") {
+      e.preventDefault();
+      searchBar.classList.remove("hidden");
+      searchInput.focus();
+    } else if (key === "s") {
+      const focusedTaskId = document.activeElement?.closest?.("[data-task-id]")?.dataset?.taskId;
+      if (focusedTaskId) {
+        const t = activeTasks().find((item) => item.id === focusedTaskId && item.list !== "done");
+        if (t) {
+          e.preventDefault();
+          editingStage = { id: t.id, mode: "started" };
+          pendingFocusTarget = { taskId: t.id, key: "stage-input" };
+          if (t.stage !== "started") updateTask(t.id, { stage: "started" });
+          else renderLists();
+        }
       }
-      return;
-    }
-
-    // Single-key shortcuts: only when NOT focused in text input/textarea/select
-    if (isTypingContext(activeEl)) {
-      return;
-    }
-
-    if (!e.ctrlKey && !e.metaKey && !e.altKey) {
-      if (e.key === "n" || e.key === "N") {
-        e.preventDefault();
-        titleInput.focus();
-      } else if (e.key === "/") {
-        e.preventDefault();
-        searchInput.focus();
-        searchInput.select();
+    } else if (key === "e") {
+      const focusedTaskId = document.activeElement?.closest?.("[data-task-id]")?.dataset?.taskId;
+      if (focusedTaskId) {
+        const t = activeTasks().find((item) => item.id === focusedTaskId);
+        if (t) {
+          e.preventDefault();
+          toggleExpandTask(t);
+        }
       }
     }
   });
 
-  // Midnight rollover + external sync checks on interval & tab focus/visibility
-  setInterval(checkDateRollover, 60_000);
+  setInterval(() => {
+    if (toDateKey(new Date()) !== lastRenderedDateKey) renderAll();
+  }, 60000);
 
   window.addEventListener("focus", () => {
-    checkDateRollover();
-    checkExternalSyncDrift();
+    if (toDateKey(new Date()) !== lastRenderedDateKey) renderAll();
+    syncFromExternalChange();
   });
 
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") {
-      checkDateRollover();
-      checkExternalSyncDrift();
+      if (toDateKey(new Date()) !== lastRenderedDateKey) renderAll();
+      syncFromExternalChange();
     }
   });
 }
