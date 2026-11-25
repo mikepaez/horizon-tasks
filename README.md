@@ -1,16 +1,22 @@
-# Horizon — 3-Month Task Organizer
+# Horizon — Task Organizer & Visual Horizon
 
-A compact Paper Desk task organizer with a 3-month horizontal deadline stripe where tasks fade from near-transparent to a solid color block as they approach.
+A calm, local-first Paper Desk task organizer with a zoomable horizontal deadline stripe (`30d` / `90d` / `180d`) where tasks fade from near-transparent to a solid color block as they approach.
+
+## Features
+- **Visual Horizon (`30d` / `90d` / `180d`):** Watercolor urgency gradient with overdue strip and Do-Date (`Today`) vs. Due-Date separation.
+- **Quick Capture & Shortcuts:** Inline `@today`, `@tom` / `@tomorrow`, `@+3d` / `@+2w` / `@+1m`, `#tags`, quick-date pills, plus keyboard shortcuts (`n` add, `/` search, `Ctrl+Z` undo, `Esc` close/blur).
+- **Rich Task Details:** Double-click inline title editing, collapsible paper drawer with notes (auto-linked `http(s)` URLs), mini-checklist subtasks, and recurring tasks (`weekly`, `monthly`, `quarterly`, `yearly`).
+- **Safe Local-First Sync:** Atomic writes + corrupt-file backups in Python mode, IndexedDB file-handle persistence with 1-click Reconnect in portable mode, external-change conflict detection, Merge/Replace import, and multi-step Undo.
 
 ## Two Ways to Run
 
 ### 1. Home PC (with Python)
-Double-click `start.bat` (or run `py server.py` in PowerShell). Saves automatically to `tasks.json` in this folder.
+Double-click `start.bat` (or run `py server.py` in PowerShell). Saves automatically and atomically to `tasks.json` in this folder.
 
 ### 2. Work Laptop (NO Python needed)
-Copy the single file **`horizon-portable.html`** (~40 KB) to your work laptop and double-click it in Edge or Chrome.
+Copy the single file **`horizon-portable.html`** (~120 KB) to your work laptop and double-click it in Edge or Chrome.
 - Works offline with zero installs or IT permissions.
-- Click **Open file** or **New file** in the top bar (Edge/Chrome) to link a real `tasks.json` file (for example inside OneDrive or Documents) for automatic saving — or just use **Export / Import** anytime.
+- Click **Open file** or **New file** in the top bar (Edge/Chrome) to link a real `tasks.json` file (for example inside OneDrive or Documents) for automatic saving with conflict detection — or use **Export / Import** anytime.
 
 ## Rebuilding the Single-File Version
 Whenever you edit the app files, run:
@@ -21,4 +27,4 @@ That regenerates `horizon-portable.html` automatically.
 
 ## Running Tests
 - Python & portable bundle tests: `py test_server.py`
-- Timeline & gradient logic tests: `node logic.test.js`
+- Timeline, recurrence, tags & gradient logic tests: `node logic.test.js`

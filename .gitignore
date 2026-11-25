@@ -1,5 +1,7 @@
 # Personal task data — NEVER upload to GitHub
 tasks.json
+tasks.json.*
+.tasks.json.*.tmp
 horizon-tasks-*.json
 
 # Python & OS generated files

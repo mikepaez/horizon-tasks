@@ -1,0 +1,127 @@
+{
+  "description": "Shared cross-language contract for logic.js:normalizeTask and server.py:normalize_task",
+  "nullCases": [null, "text", 123, []],
+  "cases": [
+    {
+      "name": "legacy inbox task",
+      "input": {
+        "id": "t-legacy-1",
+        "title": "  Legacy item  ",
+        "dueDate": "2026-12-01",
+        "status": "inbox",
+        "createdAt": 1000,
+        "completedAt": null
+      },
+      "expected": {
+        "id": "t-legacy-1",
+        "title": "Legacy item",
+        "dueDate": "2026-12-01",
+        "status": "inbox",
+        "previousStatus": "inbox",
+        "notes": "",
+        "subtasks": [],
+        "recurrence": "",
+        "recurrenceSpawnedId": null,
+        "createdAt": 1000,
+        "updatedAt": 1000,
+        "completedAt": null
+      }
+    },
+    {
+      "name": "undated today task keeps empty dueDate",
+      "input": {
+        "id": "t-today-1",
+        "title": "Call bank",
+        "dueDate": "",
+        "status": "today",
+        "createdAt": 2000
+      },
+      "expected": {
+        "id": "t-today-1",
+        "title": "Call bank",
+        "dueDate": "",
+        "status": "today",
+        "previousStatus": "today",
+        "notes": "",
+        "subtasks": [],
+        "recurrence": "",
+        "recurrenceSpawnedId": null,
+        "createdAt": 2000,
+        "updatedAt": 2000,
+        "completedAt": null
+      }
+    },
+    {
+      "name": "done task preserves previousStatus, recurrence, subtasks, and completedAt",
+      "input": {
+        "id": "t-done-1",
+        "title": "Pay bill #home",
+        "dueDate": "2026-11-20",
+        "status": "done",
+        "previousStatus": "today",
+        "notes": "Paid online",
+        "subtasks": [
+          { "id": "st-1", "text": "  Download PDF  ", "done": true },
+          { "id": "st-2", "text": "   ", "done": false },
+          "not-an-object",
+          { "id": "st-3", "text": "Archive", "done": "truthy-string" }
+        ],
+        "recurrence": "monthly",
+        "recurrenceSpawnedId": "t-next-1",
+        "createdAt": 5000,
+        "updatedAt": 6000,
+        "completedAt": "2026-11-21"
+      },
+      "expected": {
+        "id": "t-done-1",
+        "title": "Pay bill #home",
+        "dueDate": "2026-11-20",
+        "status": "done",
+        "previousStatus": "today",
+        "notes": "Paid online",
+        "subtasks": [
+          { "id": "st-1", "text": "Download PDF", "done": true },
+          { "id": "st-3", "text": "Archive", "done": false }
+        ],
+        "recurrence": "monthly",
+        "recurrenceSpawnedId": "t-next-1",
+        "createdAt": 5000,
+        "updatedAt": 6000,
+        "completedAt": "2026-11-21"
+      }
+    },
+    {
+      "name": "garbage fields are sanitized consistently",
+      "input": {
+        "id": "t-messy-1",
+        "title": "   ",
+        "dueDate": "2026-02-30",
+        "status": "unknown",
+        "previousStatus": "done",
+        "notes": 999,
+        "subtasks": "nope",
+        "recurrence": "daily",
+        "recurrenceSpawnedId": 42,
+        "createdAt": 3000,
+        "updatedAt": 3000,
+        "completedAt": "2026-11-01",
+        "isSample": true
+      },
+      "expected": {
+        "id": "t-messy-1",
+        "title": "Untitled task",
+        "dueDate": "",
+        "status": "inbox",
+        "previousStatus": "inbox",
+        "notes": "",
+        "subtasks": [],
+        "recurrence": "",
+        "recurrenceSpawnedId": null,
+        "createdAt": 3000,
+        "updatedAt": 3000,
+        "completedAt": null,
+        "isSample": true
+      }
+    }
+  ]
+}
