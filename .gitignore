@@ -10,3 +10,7 @@ __pycache__/
 *.pyc
 .DS_Store
 Thumbs.db
+
+# Local Obsidian plugin runtime state (keep built horizon-lifeos/ tracked!)
+obsidian-plugin/**/data.json
+

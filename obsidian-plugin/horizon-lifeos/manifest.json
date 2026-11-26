@@ -1,0 +1,9 @@
+{
+  "id": "horizon-lifeos",
+  "name": "Horizon LifeOS (GTD + PARA)",
+  "version": "1.0.0",
+  "minAppVersion": "1.5.0",
+  "description": "Calm Paper Desk GTD + PARA execution layer with a customizable 1-730d watercolor deadline horizon, Today-3 focus cap, Fading Ink, Inbox triage, and anonymized audits.",
+  "author": "Mike Paez",
+  "isDesktopOnly": false
+}

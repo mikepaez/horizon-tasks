@@ -1,0 +1,1593 @@
+/* Horizon LifeOS — Scoped Paper Desk & Espresso Desk Styles (Desktop + Mobile) */
+
+.horizon-lifeos-root {
+  container-type: inline-size;
+  container-name: horizon-desk;
+
+  --hz-bg: #f5efe4;
+  --hz-surface: #fbf8f1;
+  --hz-surface-alt: #ede5d6;
+  --hz-border: #ddd3c2;
+  --hz-border-strong: #c2b49e;
+  --hz-ink: #231e18;
+  --hz-muted: #5b4f40;
+  --hz-soft: #6f6252;
+  --hz-danger: #b03227;
+  --hz-danger-bg: #f9eae7;
+  --hz-amber: #8a5610;
+  --hz-amber-bg: #fdf4e3;
+  --hz-ok: #395c4b;
+  --hz-ok-bg: #edf5ef;
+  --hz-started: #b45d1f;
+  --hz-waiting: #556470;
+  --hz-personal: #456585;
+  --hz-radius: 4px;
+  --hz-serif: Georgia, "Times New Roman", serif;
+  --hz-mono: var(--font-monospace, ui-monospace, "Cascadia Mono", Consolas, monospace);
+
+  position: relative;
+  height: 100%;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background: var(--hz-bg);
+  color: var(--hz-ink);
+  font-family: var(--font-interface, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif);
+  font-size: 13px;
+  line-height: 1.45;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+.horizon-lifeos-root .hz-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.theme-dark .horizon-lifeos-root {
+  --hz-bg: #1e1b18;
+  --hz-surface: #26221e;
+  --hz-surface-alt: #322c26;
+  --hz-border: #3d362f;
+  --hz-border-strong: #574d43;
+  --hz-ink: #ede4d5;
+  --hz-muted: #bfb3a1;
+  --hz-soft: #9c8f7d;
+  --hz-danger: #e26d61;
+  --hz-danger-bg: #3b2220;
+  --hz-amber: #e2a856;
+  --hz-amber-bg: #352a1b;
+  --hz-ok: #7ab092;
+  --hz-ok-bg: #1f3026;
+  --hz-started: #df8b4b;
+  --hz-waiting: #93a7b6;
+  --hz-personal: #86a9cb;
+}
+
+.horizon-lifeos-root *,
+.horizon-lifeos-root *::before,
+.horizon-lifeos-root *::after {
+  box-sizing: border-box;
+}
+
+.horizon-lifeos-root .hz-hidden {
+  display: none !important;
+}
+
+.horizon-lifeos-root button {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.horizon-lifeos-root .hz-shell {
+  max-width: 980px;
+  margin: 0 auto;
+  padding: 14px 16px 56px;
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+}
+
+/* Top Bar */
+.horizon-lifeos-root .hz-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--hz-border);
+  flex-wrap: wrap;
+}
+
+.horizon-lifeos-root .hz-topbar-left {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.horizon-lifeos-root .hz-topbar h1 {
+  margin: 0;
+  font-family: var(--hz-serif);
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--hz-ink);
+}
+
+.horizon-lifeos-root .hz-sep {
+  color: var(--hz-border-strong);
+}
+
+.horizon-lifeos-root .hz-meta-mono {
+  font-family: var(--hz-mono);
+  font-size: 11px;
+  color: var(--hz-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.horizon-lifeos-root .hz-topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.horizon-lifeos-root .hz-text-btn {
+  background: none;
+  border: none;
+  box-shadow: none;
+  padding: 3px 6px;
+  height: auto;
+  font-size: 12px;
+  color: var(--hz-muted);
+  border-radius: 3px;
+}
+
+.horizon-lifeos-root .hz-text-btn:hover {
+  color: var(--hz-ink);
+  background: var(--hz-surface-alt);
+}
+
+/* Area Filter Strip */
+.horizon-lifeos-root .hz-area-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.horizon-lifeos-root .hz-area-pills {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.horizon-lifeos-root .hz-area-pill {
+  font-family: var(--hz-mono);
+  font-size: 11px;
+  padding: 2px 9px;
+  height: auto;
+  border-radius: 99px;
+  border: 1px solid var(--hz-border);
+  background: var(--hz-surface);
+  color: var(--hz-muted);
+  box-shadow: none;
+}
+
+.horizon-lifeos-root .hz-area-pill:hover {
+  border-color: var(--hz-border-strong);
+  color: var(--hz-ink);
+}
+
+.horizon-lifeos-root .hz-area-pill.is-active {
+  background: var(--hz-ink);
+  color: var(--hz-surface);
+  border-color: var(--hz-ink);
+  font-weight: 600;
+}
+
+/* System & Check-in / Weekly Review Banners */
+.horizon-lifeos-root .hz-system-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 7px 11px;
+  border-radius: var(--hz-radius);
+  font-size: 12px;
+  border: 1px solid var(--hz-border-strong);
+  background: var(--hz-amber-bg);
+  color: var(--hz-ink);
+}
+
+.horizon-lifeos-root .hz-banner-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.horizon-lifeos-root .hz-banner-btn {
+  border: 1px solid var(--hz-border-strong);
+  background: var(--hz-surface);
+  color: var(--hz-ink);
+  border-radius: 3px;
+  padding: 3px 9px;
+  height: auto;
+  font-size: 11.5px;
+  font-weight: 500;
+  box-shadow: none;
+}
+
+.horizon-lifeos-root .hz-banner-btn:hover {
+  background: var(--hz-surface-alt);
+}
+
+.horizon-lifeos-root .hz-checkin-banner {
+  background: var(--hz-surface);
+  border: 1px solid var(--hz-border-strong);
+  border-left: 3px solid var(--hz-started);
+  border-radius: var(--hz-radius);
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.horizon-lifeos-root .hz-checkin-banner.is-review {
+  border-left-color: var(--hz-ok);
+}
+
+.horizon-lifeos-root .hz-checkin-summary-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 12.5px;
+}
+
+.horizon-lifeos-root .hz-checkin-summary-text strong {
+  font-family: var(--hz-serif);
+}
+
+.horizon-lifeos-root .hz-checkin-wins-line {
+  font-family: var(--hz-mono);
+  font-size: 11px;
+  color: var(--hz-ok);
+  font-weight: 600;
+}
+
+.horizon-lifeos-root .hz-checkin-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px 10px;
+  background: var(--hz-bg);
+  border: 1px solid var(--hz-border);
+  border-radius: 3px;
+}
+
+.horizon-lifeos-root .hz-checkin-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 240px;
+}
+
+.horizon-lifeos-root .hz-checkin-card-kicker {
+  font-family: var(--hz-mono);
+  font-size: 10.5px;
+  color: var(--hz-soft);
+}
+
+.horizon-lifeos-root .hz-checkin-card-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--hz-ink);
+}
+
+.horizon-lifeos-root .hz-checkin-card-sub {
+  font-size: 11.5px;
+  color: var(--hz-muted);
+}
+
+.horizon-lifeos-root .hz-checkin-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+/* Inbox Triage Strip (auto-hidden when Inbox Zero) */
+.horizon-lifeos-root .hz-inbox-block {
+  background: var(--hz-surface);
+  border: 1px solid var(--hz-border-strong);
+  border-left: 3px solid var(--hz-amber);
+  border-radius: var(--hz-radius);
+  padding: 9px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.horizon-lifeos-root .hz-inbox-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.horizon-lifeos-root .hz-inbox-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.horizon-lifeos-root .hz-inbox-select {
+  font-family: var(--hz-mono);
+  font-size: 11px;
+  padding: 2px 6px;
+  height: auto;
+  border-radius: 3px;
+  border: 1px solid var(--hz-border-strong);
+  background: var(--hz-bg);
+  color: var(--hz-ink);
+}
+
+.horizon-lifeos-root .hz-inbox-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 5px 0;
+  border-top: 1px solid var(--hz-surface-alt);
+}
+
+.horizon-lifeos-root .hz-inbox-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  flex: 1 1 240px;
+}
+
+.horizon-lifeos-root .hz-inbox-title {
+  font-size: 12.5px;
+  color: var(--hz-ink);
+  word-break: break-word;
+}
+
+.horizon-lifeos-root .hz-inbox-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+/* Quick Capture Bar */
+.horizon-lifeos-root .hz-capture-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.horizon-lifeos-root .hz-capture-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  background: var(--hz-surface);
+  border: 1px solid var(--hz-border);
+  border-radius: var(--hz-radius);
+  padding: 5px 7px;
+}
+
+.horizon-lifeos-root .hz-capture-bar:focus-within {
+  border-color: var(--hz-border-strong);
+}
+
+.horizon-lifeos-root .hz-capture-input {
+  flex: 1 1 180px;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  padding: 4px 6px;
+  font-size: 13px;
+  color: var(--hz-ink);
+}
+
+.horizon-lifeos-root .hz-capture-date {
+  border: 1px solid var(--hz-border);
+  border-radius: 3px;
+  background: var(--hz-bg);
+  color: var(--hz-muted);
+  font-family: var(--hz-mono);
+  font-size: 11px;
+  padding: 3px 6px;
+  height: auto;
+}
+
+.horizon-lifeos-root .hz-capture-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--hz-muted);
+  padding: 3px 6px;
+  border-radius: 3px;
+  user-select: none;
+  cursor: pointer;
+}
+
+.horizon-lifeos-root .hz-capture-check:hover {
+  background: var(--hz-surface-alt);
+  color: var(--hz-ink);
+}
+
+.horizon-lifeos-root .hz-btn-add {
+  background: var(--hz-ink);
+  color: var(--hz-surface);
+  border: 1px solid var(--hz-ink);
+  border-radius: 3px;
+  padding: 4px 13px;
+  height: auto;
+  font-size: 12px;
+  font-weight: 600;
+  box-shadow: none;
+}
+
+.horizon-lifeos-root .hz-capture-chips {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 0 2px;
+}
+
+.horizon-lifeos-root .hz-chip-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.horizon-lifeos-root .hz-chip-btn {
+  border: 1px solid var(--hz-border);
+  background: var(--hz-surface);
+  color: var(--hz-muted);
+  border-radius: 3px;
+  padding: 2px 7px;
+  height: auto;
+  font-family: var(--hz-mono);
+  font-size: 10.5px;
+  box-shadow: none;
+}
+
+.horizon-lifeos-root .hz-chip-btn:hover {
+  border-color: var(--hz-border-strong);
+  color: var(--hz-ink);
+}
+
+.horizon-lifeos-root .hz-chip-btn.is-active {
+  background: var(--hz-surface-alt);
+  border-color: var(--hz-ink);
+  color: var(--hz-ink);
+  font-weight: 600;
+}
+
+.horizon-lifeos-root .hz-shortcut-hint {
+  font-family: var(--hz-mono);
+  font-size: 10.5px;
+  color: var(--hz-soft);
+  margin-left: 4px;
+}
+
+/* Search & Tag Bars */
+.horizon-lifeos-root .hz-search-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--hz-surface);
+  border: 1px solid var(--hz-border-strong);
+  border-radius: var(--hz-radius);
+  padding: 4px 8px;
+}
+
+.horizon-lifeos-root .hz-search-input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  font-size: 12.5px;
+  color: var(--hz-ink);
+  padding: 2px 4px;
+}
+
+.horizon-lifeos-root .hz-tag-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 0 2px;
+}
+
+.horizon-lifeos-root .hz-tag-chips {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.horizon-lifeos-root .hz-tag-chip {
+  font-family: var(--hz-mono);
+  font-size: 10.5px;
+  color: var(--hz-muted);
+  background: var(--hz-surface);
+  border: 1px solid var(--hz-border);
+  border-radius: 99px;
+  padding: 1px 8px;
+  height: auto;
+  box-shadow: none;
+}
+
+.horizon-lifeos-root .hz-tag-chip.active {
+  background: var(--hz-ink);
+  color: var(--hz-surface);
+  border-color: var(--hz-ink);
+  font-weight: 600;
+}
+
+/* Paper Desk Editorial Blocks */
+.horizon-lifeos-root .hz-block {
+  background: var(--hz-surface);
+  border: 1px solid var(--hz-border);
+  border-radius: var(--hz-radius);
+  padding: 11px 14px;
+}
+
+.horizon-lifeos-root .hz-block-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+  padding-bottom: 5px;
+  border-bottom: 1px solid var(--hz-surface-alt);
+  flex-wrap: wrap;
+}
+
+.horizon-lifeos-root .hz-block-title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.horizon-lifeos-root .hz-block-head h2 {
+  margin: 0;
+  font-family: var(--hz-serif);
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--hz-ink);
+}
+
+.horizon-lifeos-root .hz-ok-text {
+  color: var(--hz-ok);
+}
+
+.horizon-lifeos-root .hz-head-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.horizon-lifeos-root .hz-nudge {
+  font-size: 11.5px;
+  font-style: italic;
+  color: var(--hz-soft);
+}
+
+.horizon-lifeos-root .hz-nudge.is-heavy {
+  color: var(--hz-danger);
+  font-style: normal;
+  font-weight: 600;
+}
+
+.horizon-lifeos-root .hz-swap-prompt {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  padding: 7px 9px;
+  background: var(--hz-amber-bg);
+  border: 1px solid var(--hz-border-strong);
+  border-radius: 3px;
+  font-size: 12px;
+}
+
+.horizon-lifeos-root .hz-swap-prompt-label {
+  font-weight: 600;
+  color: var(--hz-amber);
+}
+
+/* Horizon Header, Custom Days Combo & Timeline */
+.horizon-lifeos-root .hz-horizon-range {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.horizon-lifeos-root .hz-horizon-combo {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  background: var(--hz-bg);
+  border: 1px solid var(--hz-border);
+  border-radius: 3px;
+}
+
+.horizon-lifeos-root .hz-horizon-days-input {
+  width: 40px;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  color: var(--hz-ink);
+  font-family: var(--hz-mono);
+  font-size: 11px;
+  font-weight: 700;
+  text-align: right;
+  padding: 2px 1px 2px 5px;
+  height: auto;
+}
+
+.horizon-lifeos-root .hz-horizon-days-unit {
+  font-family: var(--hz-mono);
+  font-size: 10.5px;
+  color: var(--hz-muted);
+  padding: 0 3px 0 1px;
+  user-select: none;
+}
+
+.horizon-lifeos-root .hz-horizon-preset-toggle {
+  border: none;
+  border-left: 1px solid var(--hz-border);
+  background: transparent;
+  box-shadow: none;
+  color: var(--hz-muted);
+  font-size: 10px;
+  line-height: 1;
+  padding: 3px 6px;
+  height: auto;
+}
+
+.horizon-lifeos-root .hz-horizon-preset-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 50;
+  min-width: 132px;
+  background: var(--hz-surface);
+  border: 1px solid var(--hz-border-strong);
+  border-radius: var(--hz-radius);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.16);
+  padding: 3px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.horizon-lifeos-root .hz-horizon-preset-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  border: none;
+  box-shadow: none;
+  background: transparent;
+  color: var(--hz-ink);
+  font-family: var(--hz-mono);
+  font-size: 11px;
+  padding: 4px 7px;
+  height: auto;
+  border-radius: 2px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.horizon-lifeos-root .hz-horizon-preset-option:hover,
+.horizon-lifeos-root .hz-horizon-preset-option.active {
+  background: var(--hz-surface-alt);
+}
+
+.horizon-lifeos-root .hz-legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--hz-mono);
+  font-size: 10.5px;
+  color: var(--hz-soft);
+}
+
+.horizon-lifeos-root .hz-legend-bar {
+  width: 54px;
+  height: 7px;
+  border-radius: 2px;
+  background: linear-gradient(
+    to right,
+    rgba(92, 118, 106, 0.15) 0%,
+    rgba(168, 134, 58, 0.55) 55%,
+    rgba(185, 58, 46, 0.98) 100%
+  );
+  border: 1px solid var(--hz-border);
+}
+
+.horizon-lifeos-root .hz-overdue-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+  padding: 5px 8px;
+  background: var(--hz-danger-bg);
+  border: 1px solid var(--hz-border-strong);
+  border-radius: 3px;
+  font-size: 11.5px;
+}
+
+.horizon-lifeos-root .hz-overdue-label {
+  font-family: var(--hz-mono);
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--hz-danger);
+}
+
+.horizon-lifeos-root .hz-overdue-chip-group {
+  display: inline-flex;
+  align-items: stretch;
+  border-radius: 2px;
+  overflow: hidden;
+  border: 1px solid rgba(138, 36, 28, 0.35);
+}
+
+.horizon-lifeos-root .hz-overdue-chip {
+  background: var(--hz-danger);
+  color: #fdfaf4;
+  border: none;
+  box-shadow: none;
+  padding: 2px 7px;
+  height: auto;
+  font-size: 11.5px;
+  font-weight: 500;
+}
+
+.horizon-lifeos-root .hz-overdue-snooze-btn {
+  background: var(--hz-surface);
+  color: var(--hz-danger);
+  border: none;
+  box-shadow: none;
+  border-left: 1px solid var(--hz-border);
+  padding: 2px 6px;
+  height: auto;
+  font-family: var(--hz-mono);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.horizon-lifeos-root .hz-timeline-scroll {
+  overflow-x: auto;
+}
+
+.horizon-lifeos-root .hz-timeline-canvas {
+  position: relative;
+  min-width: 580px;
+  width: 100%;
+  background: var(--hz-bg);
+  border: 1px solid var(--hz-border);
+  border-radius: 3px;
+  padding: 7px 9px 9px;
+}
+
+.horizon-lifeos-root .hz-timeline-axis {
+  position: relative;
+  height: 20px;
+  border-bottom: 1px solid var(--hz-border-strong);
+  margin-bottom: 7px;
+}
+
+.horizon-lifeos-root .hz-month-marker {
+  position: absolute;
+  top: 0;
+  height: 15px;
+  padding-left: 5px;
+  border-left: 1px solid var(--hz-border-strong);
+  font-family: var(--hz-mono);
+  font-size: 10.5px;
+  color: var(--hz-muted);
+  display: flex;
+  align-items: center;
+  white-space: nowrap;
+}
+
+.horizon-lifeos-root .hz-month-marker.is-today {
+  border-left: 2px solid var(--hz-ink);
+  color: var(--hz-ink);
+  font-weight: 700;
+}
+
+.horizon-lifeos-root .hz-month-marker.is-accent {
+  color: var(--hz-ink);
+  font-weight: 600;
+}
+
+.horizon-lifeos-root .hz-month-marker.is-minor {
+  border-left-color: var(--hz-border);
+  color: var(--hz-soft);
+}
+
+.horizon-lifeos-root .hz-timeline-grid {
+  position: absolute;
+  top: 27px;
+  bottom: 7px;
+  left: 9px;
+  right: 9px;
+  pointer-events: none;
+}
+
+.horizon-lifeos-root .hz-grid-line {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: rgba(128, 114, 96, 0.12);
+}
+
+.horizon-lifeos-root .hz-grid-line.is-major {
+  background: rgba(128, 114, 96, 0.24);
+}
+
+.horizon-lifeos-root .hz-timeline-lanes {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  max-height: 224px;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
+.horizon-lifeos-root .hz-timeline-lanes.is-expanded {
+  max-height: none;
+  overflow-y: visible;
+}
+
+.horizon-lifeos-root .hz-section-foot {
+  margin-top: 6px;
+  padding-top: 4px;
+  border-top: 1px dashed var(--hz-surface-alt);
+  display: flex;
+  justify-content: flex-end;
+}
+
+.horizon-lifeos-root .hz-timeline-empty {
+  color: var(--hz-soft);
+  font-style: italic;
+  font-size: 12px;
+  padding: 8px 4px;
+}
+
+.horizon-lifeos-root .hz-timeline-lane {
+  position: relative;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  min-width: 0;
+}
+
+.horizon-lifeos-root .hz-timeline-bar {
+  position: relative;
+  height: 20px;
+  border-radius: 2px;
+  border: none;
+  border-right: 3px solid transparent;
+  box-shadow: none;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 0 7px;
+  flex-shrink: 0;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.horizon-lifeos-root .hz-timeline-bar.is-personal {
+  height: 15px;
+}
+
+.horizon-lifeos-root .hz-timeline-bar.is-today-star {
+  box-shadow: inset 0 -2px 0 rgba(35, 30, 24, 0.55);
+}
+
+.theme-dark .horizon-lifeos-root .hz-timeline-bar.is-today-star {
+  box-shadow: inset 0 -2px 0 rgba(253, 250, 244, 0.6);
+}
+
+.horizon-lifeos-root .hz-timeline-bar.is-waiting {
+  opacity: 0.62;
+  border: 1px dashed var(--hz-waiting);
+  border-right: 3px dashed var(--hz-waiting);
+}
+
+.horizon-lifeos-root .hz-timeline-progress-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  pointer-events: none;
+  opacity: 0.48;
+}
+
+.horizon-lifeos-root .hz-timeline-bar-label {
+  position: relative;
+  z-index: 1;
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  flex: 0 1 auto;
+}
+
+.horizon-lifeos-root .hz-timeline-bar-meta {
+  position: relative;
+  z-index: 1;
+  font-family: var(--hz-mono);
+  font-size: 10.5px;
+  opacity: 0.92;
+  margin-left: 6px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.horizon-lifeos-root .hz-timeline-outside-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 7px;
+  padding: 1px 5px;
+  height: auto;
+  border: none;
+  box-shadow: none;
+  border-radius: 2px;
+  background: transparent;
+  color: var(--hz-ink);
+  font-size: 12px;
+  white-space: nowrap;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.horizon-lifeos-root .hz-timeline-outside-label:hover {
+  background: var(--hz-surface-alt);
+}
+
+.horizon-lifeos-root .hz-timeline-outside-title {
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.horizon-lifeos-root .hz-timeline-outside-meta {
+  font-family: var(--hz-mono);
+  font-size: 10.5px;
+  flex-shrink: 0;
+}
+
+.horizon-lifeos-root .hz-timeline-beyond-note {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 6px;
+  padding-top: 5px;
+  border-top: 1px dotted var(--hz-border);
+  font-family: var(--hz-mono);
+  font-size: 10.5px;
+  color: var(--hz-muted);
+}
+
+.horizon-lifeos-root .hz-beyond-label {
+  font-weight: 700;
+  text-transform: uppercase;
+  font-size: 10px;
+  margin-right: 2px;
+}
+
+.horizon-lifeos-root .hz-beyond-chip {
+  background: var(--hz-surface);
+  color: var(--hz-ink);
+  border: 1px solid var(--hz-border);
+  box-shadow: none;
+  border-radius: 2px;
+  padding: 1px 6px;
+  height: auto;
+  font-family: var(--hz-mono);
+  font-size: 10.5px;
+}
+
+.horizon-lifeos-root .hz-timeline-inspector {
+  margin-top: 8px;
+  padding: 6px 9px;
+  border: 1px solid var(--hz-border);
+  border-radius: 3px;
+  background: var(--hz-bg);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12px;
+}
+
+.horizon-lifeos-root .hz-timeline-inspector-info {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.horizon-lifeos-root .hz-timeline-inspector-actions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+/* Two-Column Desk Layout + Container Query for Sidebars & iPhone */
+.horizon-lifeos-root .hz-columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  align-items: start;
+}
+
+@container horizon-desk (max-width: 720px) {
+  .horizon-lifeos-root .hz-columns {
+    grid-template-columns: 1fr;
+  }
+  .horizon-lifeos-root .hz-shortcut-hint {
+    display: none;
+  }
+  .horizon-lifeos-root .hz-shell {
+    padding: 10px 10px 64px;
+  }
+}
+
+.horizon-lifeos-root .hz-col {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.horizon-lifeos-root .hz-filters {
+  display: inline-flex;
+  gap: 2px;
+}
+
+.horizon-lifeos-root .hz-filter-btn {
+  border: none;
+  box-shadow: none;
+  background: transparent;
+  color: var(--hz-soft);
+  font-size: 11.5px;
+  padding: 2px 7px;
+  height: auto;
+  border-radius: 3px;
+}
+
+.horizon-lifeos-root .hz-filter-btn.active {
+  background: var(--hz-surface-alt);
+  color: var(--hz-ink);
+  font-weight: 600;
+}
+
+/* Task & Project Rows */
+.horizon-lifeos-root .hz-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.horizon-lifeos-root .hz-task-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 4px;
+  border-top: 1px solid var(--hz-surface-alt);
+}
+
+.horizon-lifeos-root .hz-task-item:first-child {
+  border-top: none;
+}
+
+.horizon-lifeos-root .hz-task-item:hover {
+  background: var(--hz-bg);
+}
+
+.horizon-lifeos-root .hz-task-item.is-done .hz-task-title,
+.horizon-lifeos-root .hz-task-item.is-dropped .hz-task-title {
+  text-decoration: line-through;
+  color: var(--hz-soft);
+}
+
+.horizon-lifeos-root .hz-task-item.is-fading .hz-task-body {
+  opacity: var(--hz-ink-alpha, 0.68);
+  transition: opacity 0.15s ease;
+}
+
+.horizon-lifeos-root .hz-task-item.is-fading:hover .hz-task-body,
+.horizon-lifeos-root .hz-task-item.is-fading:focus-within .hz-task-body {
+  opacity: 1;
+}
+
+.horizon-lifeos-root .hz-stale-bar {
+  margin-left: 22px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 11px;
+  color: var(--hz-soft);
+}
+
+.horizon-lifeos-root .hz-stale-btn {
+  border: 1px solid var(--hz-border);
+  background: var(--hz-surface);
+  color: var(--hz-muted);
+  box-shadow: none;
+  border-radius: 2px;
+  padding: 1px 6px;
+  height: auto;
+  font-size: 10.5px;
+}
+
+.horizon-lifeos-root .hz-stale-btn.is-drop:hover {
+  color: var(--hz-danger);
+  background: var(--hz-danger-bg);
+}
+
+.horizon-lifeos-root .hz-task-main-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.horizon-lifeos-root .hz-task-checkbox {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: var(--hz-ok);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.horizon-lifeos-root .hz-stage-btn {
+  border: none;
+  box-shadow: none;
+  background: transparent;
+  padding: 0 3px;
+  height: auto;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--hz-soft);
+  flex-shrink: 0;
+  border-radius: 2px;
+}
+
+.horizon-lifeos-root .hz-stage-btn.is-started {
+  color: var(--hz-started);
+  font-weight: 700;
+}
+
+.horizon-lifeos-root .hz-stage-btn.is-waiting {
+  color: var(--hz-waiting);
+}
+
+.horizon-lifeos-root .hz-task-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.horizon-lifeos-root .hz-task-line {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.horizon-lifeos-root .hz-task-title {
+  font-size: 13px;
+  color: var(--hz-ink);
+  word-break: break-word;
+}
+
+.horizon-lifeos-root .hz-task-title-input {
+  width: 100%;
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--hz-ink);
+  background: var(--hz-surface);
+  border: 1px solid var(--hz-border-strong);
+  border-radius: 2px;
+  padding: 2px 5px;
+}
+
+.horizon-lifeos-root .hz-kind-badge {
+  font-family: var(--hz-mono);
+  font-size: 9.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 0 5px;
+  border-radius: 2px;
+  border: 1px solid var(--hz-border-strong);
+  color: var(--hz-muted);
+  background: var(--hz-bg);
+}
+
+.horizon-lifeos-root .hz-area-badge {
+  font-family: var(--hz-mono);
+  font-size: 10px;
+  padding: 0 5px;
+  border-radius: 2px;
+  color: var(--hz-muted);
+  background: var(--hz-surface-alt);
+}
+
+.horizon-lifeos-root .hz-needs-next-badge {
+  font-family: var(--hz-mono);
+  font-size: 10px;
+  font-weight: 600;
+  padding: 0 5px;
+  border-radius: 2px;
+  background: var(--hz-amber-bg);
+  color: var(--hz-amber);
+  border: 1px solid var(--hz-border-strong);
+}
+
+.horizon-lifeos-root .hz-due-tag {
+  font-family: var(--hz-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 1px 5px;
+  border-radius: 2px;
+  white-space: nowrap;
+}
+
+.horizon-lifeos-root .hz-done-date {
+  font-family: var(--hz-mono);
+  font-size: 10.5px;
+  color: var(--hz-soft);
+}
+
+.horizon-lifeos-root .hz-next-step-line {
+  font-size: 11.5px;
+  color: var(--hz-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  background: none;
+  border: none;
+  box-shadow: none;
+  padding: 0;
+  height: auto;
+  text-align: left;
+  max-width: 100%;
+}
+
+.horizon-lifeos-root .hz-next-step-line.is-waiting-line {
+  color: var(--hz-waiting);
+}
+
+.horizon-lifeos-root .hz-subtask-count-btn,
+.horizon-lifeos-root .hz-recurrence-pill {
+  border: none;
+  box-shadow: none;
+  background: transparent;
+  padding: 0 3px;
+  height: auto;
+  font-family: var(--hz-mono);
+  font-size: 10.5px;
+  color: var(--hz-muted);
+  border-radius: 2px;
+}
+
+/* Task Actions (always visible on touch devices) */
+.horizon-lifeos-root .hz-task-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  opacity: 0.78;
+}
+
+.horizon-lifeos-root .hz-task-item:hover .hz-task-actions,
+.horizon-lifeos-root .hz-task-item:focus-within .hz-task-actions {
+  opacity: 1;
+}
+
+.horizon-lifeos-root .hz-inline-date-input {
+  font-family: var(--hz-mono);
+  font-size: 10.5px;
+  border: 1px solid transparent;
+  border-radius: 2px;
+  padding: 1px 4px;
+  height: auto;
+  color: var(--hz-muted);
+  background: transparent;
+  width: 98px;
+}
+
+.horizon-lifeos-root .hz-task-item:hover .hz-inline-date-input,
+.horizon-lifeos-root .hz-inline-date-input:focus {
+  border-color: var(--hz-border);
+  background: var(--hz-surface);
+}
+
+.horizon-lifeos-root .hz-row-btn {
+  border: none;
+  box-shadow: none;
+  background: transparent;
+  color: var(--hz-muted);
+  border-radius: 2px;
+  padding: 2px 6px;
+  height: auto;
+  font-size: 11.5px;
+}
+
+.horizon-lifeos-root .hz-row-btn:hover {
+  background: var(--hz-surface-alt);
+  color: var(--hz-ink);
+}
+
+.horizon-lifeos-root .hz-row-btn.del:hover {
+  color: var(--hz-danger);
+  background: var(--hz-danger-bg);
+}
+
+@media (hover: none) {
+  .horizon-lifeos-root .hz-task-actions {
+    opacity: 1;
+  }
+  .horizon-lifeos-root .hz-inline-date-input {
+    border-color: var(--hz-border);
+    background: var(--hz-surface);
+  }
+  .horizon-lifeos-root .hz-row-btn,
+  .horizon-lifeos-root .hz-banner-btn,
+  .horizon-lifeos-root .hz-chip-btn {
+    padding: 5px 8px;
+  }
+}
+
+/* Inline Stage Editor & Detail Drawer */
+.horizon-lifeos-root .hz-stage-editor,
+.horizon-lifeos-root .hz-task-detail {
+  margin-left: 22px;
+  margin-top: 3px;
+  padding: 7px 9px;
+  background: var(--hz-bg);
+  border: 1px solid var(--hz-border);
+  border-radius: 3px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.horizon-lifeos-root .hz-stage-editor-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.horizon-lifeos-root .hz-stage-chip {
+  border: 1px solid var(--hz-border);
+  background: var(--hz-surface);
+  color: var(--hz-muted);
+  box-shadow: none;
+  border-radius: 3px;
+  padding: 2px 7px;
+  height: auto;
+  font-size: 11px;
+}
+
+.horizon-lifeos-root .hz-stage-chip.active {
+  border-color: var(--hz-ink);
+  background: var(--hz-ink);
+  color: var(--hz-surface);
+}
+
+.horizon-lifeos-root .hz-stage-editor-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.horizon-lifeos-root .hz-stage-editor-input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--hz-border-strong);
+  border-radius: 3px;
+  background: var(--hz-surface);
+  color: var(--hz-ink);
+  font-family: inherit;
+  font-size: 12px;
+  padding: 4px 7px;
+  height: auto;
+}
+
+.horizon-lifeos-root .hz-stage-editor-hint {
+  font-size: 11px;
+  font-style: italic;
+  color: var(--hz-started);
+}
+
+.horizon-lifeos-root .hz-detail-label {
+  font-family: var(--hz-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--hz-soft);
+}
+
+.horizon-lifeos-root .hz-subtask-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.horizon-lifeos-root .hz-subtask-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.horizon-lifeos-root .hz-subtask-row.is-done .hz-subtask-title {
+  text-decoration: line-through;
+  color: var(--hz-soft);
+}
+
+.horizon-lifeos-root .hz-subtask-title {
+  flex: 1;
+  min-width: 0;
+  word-break: break-word;
+}
+
+.horizon-lifeos-root .hz-subtask-add-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.horizon-lifeos-root .hz-notes-preview {
+  font-size: 12px;
+  color: var(--hz-muted);
+  white-space: pre-wrap;
+  word-break: break-word;
+  padding-top: 5px;
+  border-top: 1px solid var(--hz-border);
+}
+
+/* Waiting On Collapsible Subsection */
+.horizon-lifeos-root .hz-waiting-section {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--hz-border-strong);
+}
+
+.horizon-lifeos-root .hz-waiting-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  padding: 4px;
+  height: auto;
+  border-radius: 3px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--hz-waiting);
+}
+
+.horizon-lifeos-root .hz-empty {
+  color: var(--hz-soft);
+  font-style: italic;
+  font-size: 12px;
+  padding: 8px 4px;
+}
+
+/* Scoped Undo Toast inside View */
+.horizon-lifeos-root .hz-toast {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  z-index: 60;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--hz-ink);
+  color: var(--hz-surface);
+  padding: 8px 12px;
+  border-radius: var(--hz-radius);
+  font-size: 12px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+}
+
+.horizon-lifeos-root .hz-toast-btn {
+  border: 1px solid rgba(251, 248, 241, 0.35);
+  background: transparent;
+  box-shadow: none;
+  color: var(--hz-surface);
+  border-radius: 3px;
+  padding: 2px 8px;
+  height: auto;
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.horizon-lifeos-root .hz-toast-close {
+  border: none;
+  box-shadow: none;
+  background: transparent;
+  color: var(--hz-surface);
+  font-size: 14px;
+  padding: 0 3px;
+  height: auto;
+}
+
+/* Modals */
+.horizon-lifeos-modal textarea {
+  width: 100%;
+  min-height: 110px;
+  font-family: var(--font-monospace, monospace);
+  font-size: 12px;
+}
+
+.horizon-lifeos-modal .hz-modal-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
